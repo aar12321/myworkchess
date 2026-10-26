@@ -114,3 +114,72 @@ describe('multiplayer rooms', () => {
     a.close(); b.close()
   })
 })
+
+describe('room resilience and untimed games', () => {
+  const connect = async (username: string, password: string) => {
+    let res = await request(app).post('/api/auth/login').send({ username, password })
+    if (res.status !== 200) res = await request(app).post('/api/auth/register').send({ username, password })
+    const cookie = cookieOf(res)
+    return { cookie, socket: ioc(url, { extraHeaders: { cookie }, forceNew: true }) }
+  }
+  const once = <T,>(s: Socket, ev: string, pred: (d: any) => boolean = () => true) =>
+    new Promise<T>(r => { const h = (d: any) => { if (pred(d)) { s.off(ev, h); r(d) } }; s.on(ev, h) })
+  const emit = <T,>(s: Socket, ev: string, data?: unknown) => new Promise<T>(r => s.emit(ev, data, r))
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+  it('a waiting room survives the host disconnecting, and the host can resume it', async () => {
+    const host = await connect('demo', '1234')
+    const friend = await connect('friend2', 'secret')
+    const { code } = await emit<{ code: string }>(host.socket, 'room:create', { color: 'w' })
+    host.socket.close() // phone backgrounded / page reloaded
+    await sleep(150)
+
+    const active = await request(app).get('/api/rooms/active').set('Cookie', host.cookie)
+    expect(active.body.room).toEqual({ code, status: 'waiting' })
+
+    const joined = await emit<{ code?: string; error?: string }>(friend.socket, 'room:join', { code })
+    expect(joined.error).toBeUndefined()
+
+    // Host comes back on a fresh socket and is seated again, playing.
+    const host2 = ioc(url, { extraHeaders: { cookie: host.cookie }, forceNew: true })
+    const state = once<any>(host2, 'room:state', d => d.status === 'playing')
+    await emit(host2, 'room:join', { code })
+    const s = await state
+    expect(s.color).toBe('w')
+    expect(s.black.username).toBe('friend2')
+    // Finish so the room doesn't linger for other tests.
+    host2.emit('game:resign')
+    await sleep(100)
+    host2.close(); friend.socket.close()
+  })
+
+  it('rejects joining your own waiting room from a second tab', async () => {
+    const a = await connect('demo', '1234')
+    const { code } = await emit<{ code: string }>(a.socket, 'room:create', { color: 'w' })
+    const second = ioc(url, { extraHeaders: { cookie: a.cookie }, forceNew: true })
+    const res = await emit<{ error?: string }>(second, 'room:join', { code })
+    expect(res.error).toMatch(/your own room/i)
+    a.socket.emit('game:leave') // the host walking away on purpose deletes the room
+    await sleep(100)
+    const gone = await emit<{ error?: string }>(second, 'room:join', { code })
+    expect(gone.error).toMatch(/not found/i)
+    a.socket.close(); second.close()
+  })
+
+  it('untimed rooms have no clocks and play normally', async () => {
+    const a = await connect('demo', '1234')
+    const b = await connect('friend3', 'secret')
+    const { code } = await emit<{ code: string }>(a.socket, 'room:create', { color: 'w', minutes: 0 })
+    const playing = once<any>(a.socket, 'room:state', d => d.status === 'playing')
+    await emit(b.socket, 'room:join', { code })
+    expect((await playing).clocks).toBeNull()
+    const next = once<any>(b.socket, 'room:state', d => d.history.length === 1)
+    expect((await emit<any>(a.socket, 'move:play', { from: 'e2', to: 'e4' })).ok).toBe(true)
+    expect((await next).clocks).toBeNull()
+    await sleep(1300) // the 1s clock tick must not time anyone out or crash
+    const over = once<any>(a.socket, 'room:state', d => d.status === 'over')
+    b.socket.emit('game:resign')
+    expect((await over).termination).toBe('resignation')
+    a.socket.close(); b.socket.close()
+  })
+})

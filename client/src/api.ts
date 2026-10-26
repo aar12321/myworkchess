@@ -20,5 +20,6 @@ export const api = {
   logout: () => req('/auth/logout', {}),
   saveGame: (g: { mode: string; playerColor: 'w' | 'b'; result: string; termination: string; pgn: string; startedAt: number }) => req<{ id: number }>('/games', g),
   listGames: () => req<{ games: GameSummary[] }>('/games').then(r => r.games),
+  activeRoom: () => req<{ room: { code: string; status: string } | null }>('/rooms/active').then(r => r.room).catch(() => null),
   getGame: (id: number) => req<{ game: GameFull }>(`/games/${id}`).then(r => r.game),
 }

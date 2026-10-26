@@ -14,7 +14,7 @@ interface Room {
   white: Seat | null
   black: Seat | null
   hostColor: 'w' | 'b'
-  clocks: { w: number; b: number }
+  clocks: { w: number; b: number } | null // null = no timer
   increment: number
   lastTick: number
   status: 'waiting' | 'playing' | 'over'
@@ -24,17 +24,26 @@ interface Room {
   startedAt: number
   gameId?: number
   timer?: NodeJS.Timeout
+  expiry?: NodeJS.Timeout
 }
 
 const createSchema = z.object({
-  minutes: z.number().min(1).max(60).default(10),
+  minutes: z.number().min(0).max(60).default(10), // 0 = no timer
   increment: z.number().min(0).max(30).default(0),
   color: z.enum(['w', 'b', 'random']).default('random'),
 })
 const moveSchema = z.object({ from: z.string().regex(/^[a-h][1-8]$/), to: z.string().regex(/^[a-h][1-8]$/), promotion: z.enum(['q', 'r', 'b', 'n']).optional() })
 
+const WAITING_TTL_MS = 30 * 60_000
+
 export function attachRooms(io: Server, db: Db) {
   const rooms = new Map<string, Room>()
+
+  const dropRoom = (room: Room) => {
+    if (room.timer) clearInterval(room.timer)
+    if (room.expiry) clearTimeout(room.expiry)
+    rooms.delete(room.code)
+  }
 
   io.use((socket, next) => {
     const cookies = parse(socket.handshake.headers.cookie || '')
@@ -68,6 +77,7 @@ export function attachRooms(io: Server, db: Db) {
   }
 
   function liveClocks(room: Room) {
+    if (!room.clocks) return null
     const c = { ...room.clocks }
     if (room.status === 'playing' && room.chess.history().length >= 2) c[room.chess.turn()] = Math.max(0, c[room.chess.turn()] - (Date.now() - room.lastTick))
     return c
@@ -86,19 +96,21 @@ export function attachRooms(io: Server, db: Db) {
     room.result = result
     room.termination = termination
     if (room.timer) clearInterval(room.timer)
+    if (room.expiry) clearTimeout(room.expiry)
     room.gameId = saveGame(db, {
       whiteId: room.white!.user.id, blackId: room.black!.user.id,
       whiteLabel: room.white!.user.username, blackLabel: room.black!.user.username,
       mode: 'pvp', result, termination, pgn: room.chess.pgn(), startedAt: room.startedAt, endedAt: Date.now(),
     })
     broadcast(room)
-    setTimeout(() => rooms.delete(room.code), 10 * 60_000).unref()
+    setTimeout(() => dropRoom(room), 10 * 60_000).unref()
   }
 
   function startClock(room: Room) {
     room.lastTick = Date.now()
+    if (!room.clocks) return // untimed game
     room.timer = setInterval(() => {
-      if (room.status !== 'playing') return
+      if (room.status !== 'playing' || !room.clocks) return
       // Clock only runs once both sides have moved.
       if (room.chess.history().length < 2) { room.lastTick = Date.now(); return }
       const turn = room.chess.turn()
@@ -134,12 +146,16 @@ export function attachRooms(io: Server, db: Db) {
       const color = p.data.color === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : p.data.color
       const room: Room = {
         code: makeCode(), chess: new Chess(), white: null, black: null, hostColor: color,
-        clocks: { w: p.data.minutes * 60_000, b: p.data.minutes * 60_000 }, increment: p.data.increment * 1000,
+        clocks: p.data.minutes > 0 ? { w: p.data.minutes * 60_000, b: p.data.minutes * 60_000 } : null,
+        increment: p.data.minutes > 0 ? p.data.increment * 1000 : 0,
         lastTick: Date.now(), status: 'waiting', startedAt: Date.now(),
       }
       const seat = { user, socketId: null }
       if (color === 'w') room.white = seat; else room.black = seat
       rooms.set(room.code, room)
+      // A waiting room outlives a dropped connection (phone backgrounded, page reloaded) but not forever.
+      room.expiry = setTimeout(() => { if (room.status === 'waiting') dropRoom(room) }, WAITING_TTL_MS)
+      room.expiry.unref()
       attach(room, color)
       ack?.({ code: room.code })
       broadcast(room)
@@ -150,7 +166,14 @@ export function attachRooms(io: Server, db: Db) {
       const room = rooms.get(code)
       if (!room) return ack?.({ error: 'Room not found. Check the code.' })
       const mine = seatOf(room, user.id)
-      if (mine) { attach(room, mine); ack?.({ code }); return broadcast(room) } // reconnect
+      if (mine) {
+        // Same account joining its own waiting room from a second tab/device: that is not an opponent.
+        const seat = mine === 'w' ? room.white! : room.black!
+        const oldAlive = seat.socketId && seat.socketId !== socket.id && io.sockets.sockets.has(seat.socketId)
+        if (room.status === 'waiting' && oldAlive)
+          return ack?.({ error: 'This is your own room. Send the code to a friend who is signed in with a different account.' })
+        attach(room, mine); ack?.({ code }); return broadcast(room) // reconnect
+      }
       if (room.white && room.black) return ack?.({ error: 'Room is full' })
       const color = room.white ? 'b' : 'w'
       const seat = { user, socketId: null }
@@ -158,6 +181,7 @@ export function attachRooms(io: Server, db: Db) {
       attach(room, color)
       room.status = 'playing'
       room.startedAt = Date.now()
+      if (room.expiry) clearTimeout(room.expiry)
       startClock(room)
       ack?.({ code })
       broadcast(room)
@@ -172,7 +196,7 @@ export function attachRooms(io: Server, db: Db) {
       if (!p.success) return ack?.({ error: 'Bad move' })
       const now = Date.now()
       try { room.chess.move(p.data) } catch { return ack?.({ error: 'Illegal move' }) }
-      if (room.chess.history().length > 2) {
+      if (room.clocks && room.chess.history().length > 2) {
         room.clocks[color] = Math.max(0, room.clocks[color] - (now - room.lastTick)) + room.increment
       }
       room.lastTick = now
@@ -215,7 +239,7 @@ export function attachRooms(io: Server, db: Db) {
       const color = seatOf(room, user.id)
       const seat = color === 'w' ? room.white : color === 'b' ? room.black : null
       if (seat?.socketId === socket.id) seat.socketId = null
-      if (room.status === 'waiting') rooms.delete(room.code)
+      if (room.status === 'waiting') dropRoom(room) // the host walked away on purpose
       else if (room.status === 'playing') broadcast(room)
       current = null
     })
@@ -226,10 +250,17 @@ export function attachRooms(io: Server, db: Db) {
       const color = seatOf(room, user.id)
       const seat = color === 'w' ? room.white : color === 'b' ? room.black : null
       if (seat && seat.socketId === socket.id) { seat.socketId = null; broadcast(room) }
-      // Abandoned waiting rooms are cleaned up.
-      if (room.status === 'waiting' && !room.white?.socketId && !room.black?.socketId) {
-        rooms.delete(room.code)
-      }
     })
   })
+
+  /** The unfinished room (waiting or playing) this user is seated in, so they can resume after a reload. */
+  return {
+    activeRoomFor(userId: number) {
+      let found: { code: string; status: Room['status'] } | null = null
+      // Map keeps insertion order, so the last match is the newest room.
+      for (const room of rooms.values())
+        if (room.status !== 'over' && seatOf(room, userId)) found = { code: room.code, status: room.status }
+      return found
+    },
+  }
 }

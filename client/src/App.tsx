@@ -12,9 +12,12 @@ type Screen = { name: 'lobby' } | { name: 'game'; setup: GameSetup; key: number 
 export default function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
   const [screen, setScreen] = useState<Screen>({ name: 'lobby' })
+  const [activeRoom, setActiveRoom] = useState<{ code: string; status: string } | null>(null)
   const [invite] = useState(() => new URLSearchParams(location.search).get('room')?.toUpperCase().slice(0, 6) ?? '')
 
   useEffect(() => { api.me().then(setUser) }, [])
+  const onLobby = user && screen.name === 'lobby'
+  useEffect(() => { if (onLobby) api.activeRoom().then(setActiveRoom) }, [onLobby])
   if (user === undefined) return <div className="min-h-[100dvh] table-bg flex items-center justify-center text-5xl">♞</div>
   if (!user) return <Auth onAuth={u => { setUser(u); setScreen({ name: 'lobby' }) }} />
 
@@ -29,7 +32,7 @@ export default function App() {
     case 'replay':
       return <Replay id={screen.id} user={user} onBack={() => setScreen(screen.from === 'history' ? { name: 'history' } : { name: 'lobby' })} />
     default:
-      return <Lobby user={user} initialCode={invite} onStart={start} onHistory={() => setScreen({ name: 'history' })}
+      return <Lobby user={user} initialCode={invite} activeRoom={activeRoom} onStart={start} onHistory={() => setScreen({ name: 'history' })}
         onLogout={async () => { await api.logout(); closeSocket(); setUser(null) }} />
   }
 }

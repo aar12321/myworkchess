@@ -14,7 +14,6 @@ import type { GameSetup } from './Lobby'
 
 interface Props { user: User; setup: GameSetup; onExit: () => void; onReview: (id: number) => void; onRematch: (s: GameSetup) => void }
 
-const AI_MINUTES = 10
 interface Outcome { result: '1-0' | '0-1' | '1/2-1/2'; termination: string }
 
 const AVATARS = { w: '/assets/avatar-w.webp', b: '/assets/avatar-b.webp' }
@@ -53,7 +52,8 @@ function AiGame({ user, setup, onExit, onReview, onRematch }: Props & { setup: E
   const chessRef = useRef(new Chess())
   const startedAt = useRef(Date.now())
   const [version, setVersion] = useState(0)
-  const [clocks, setClocks] = useState({ w: AI_MINUTES * 60_000, b: AI_MINUTES * 60_000 })
+  const timed = setup.minutes > 0
+  const [clocks, setClocks] = useState<{ w: number; b: number } | null>(timed ? { w: setup.minutes * 60_000, b: setup.minutes * 60_000 } : null)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
   const [savedId, setSavedId] = useState<number | null>(null)
   const [thinking, setThinking] = useState(false)
@@ -76,18 +76,19 @@ function AiGame({ user, setup, onExit, onReview, onRematch }: Props & { setup: E
 
   // Clock: ticks for the side to move once both players have moved.
   useEffect(() => {
-    if (outcome) return
+    if (outcome || !timed) return
     const t = setInterval(() => {
       if (chess.history().length < 2) return
       const side = chess.turn()
       setClocks(c => {
+        if (!c) return c
         const left = Math.max(0, c[side] - 250)
         if (left === 0) setOutcome({ result: side === 'w' ? '0-1' : '1-0', termination: 'timeout' })
         return { ...c, [side]: left }
       })
     }, 250)
     return () => clearInterval(t)
-  }, [outcome, chess])
+  }, [outcome, chess, timed])
 
   // The computer's turn.
   useEffect(() => {
@@ -120,8 +121,8 @@ function AiGame({ user, setup, onExit, onReview, onRematch }: Props & { setup: E
   const opp = me === 'w' ? 'b' : 'w'
   const lv = LEVELS[setup.level]
   const players: Record<'w' | 'b', PlayerInfo> = {
-    [me]: { name: user.username, color: me, clockMs: clocks[me], active: !outcome && turn === me, avatar: AVATARS[me], sub: 'You' },
-    [opp]: { name: `${lv.label} AI`, color: opp, clockMs: clocks[opp], active: !outcome && turn === opp, avatar: AVATARS[opp], sub: thinking ? 'Thinking…' : lv.elo },
+    [me]: { name: user.username, color: me, clockMs: clocks?.[me] ?? null, active: !outcome && turn === me, avatar: AVATARS[me], sub: 'You' },
+    [opp]: { name: `${lv.label} AI`, color: opp, clockMs: clocks?.[opp] ?? null, active: !outcome && turn === opp, avatar: AVATARS[opp], sub: thinking ? 'Thinking…' : lv.elo },
   } as Record<'w' | 'b', PlayerInfo>
 
   const won = outcome ? (outcome.result === '1/2-1/2' ? null : (outcome.result === '1-0') === (me === 'w')) : null
@@ -145,7 +146,7 @@ function AiGame({ user, setup, onExit, onReview, onRematch }: Props & { setup: E
 interface RoomState {
   code: string; status: 'waiting' | 'playing' | 'over'; fen: string; turn: 'w' | 'b'; pgn: string; inCheck: boolean
   white: { username: string; online: boolean } | null; black: { username: string; online: boolean } | null
-  clocks: { w: number; b: number }; color: 'w' | 'b' | null; result: string | null; termination: string | null
+  clocks: { w: number; b: number } | null; color: 'w' | 'b' | null; result: string | null; termination: string | null
   drawOffer: 'w' | 'b' | null; gameId: number | null
 }
 
@@ -153,6 +154,7 @@ function PvpGame({ user, setup, onExit, onReview }: Props & { setup: Exclude<Gam
   const [room, setRoom] = useState<RoomState | null>(null)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
+  const [connected, setConnected] = useState(true)
   const [now, setNow] = useState(Date.now())
   const receivedAt = useRef(Date.now())
   const codeRef = useRef<string | null>(setup.kind === 'join' ? setup.code : null)
@@ -163,14 +165,16 @@ function PvpGame({ user, setup, onExit, onReview }: Props & { setup: Exclude<Gam
     const onState = (r: RoomState) => { receivedAt.current = Date.now(); setRoom(r) }
     const join = () => s.emit('room:join', { code: codeRef.current }, (res: { error?: string }) => res?.error && setError(res.error))
     s.on('room:state', onState)
+    s.on('disconnect', () => setConnected(false))
     s.on('connect_error', e => setError(e.message === 'unauthorized' ? 'Please sign in again.' : 'Connection lost. Retrying…'))
-    s.on('connect', () => { setError(''); if (codeRef.current) join() })
+    s.on('connect', () => { setError(''); setConnected(true); if (codeRef.current) join() })
+    setConnected(s.connected)
     const start = () => {
       if (setup.kind === 'create') s.emit('room:create', { minutes: setup.minutes, color: setup.color }, (res: { code?: string; error?: string }) => { if (res.error) setError(res.error); else codeRef.current = res.code! })
       else join()
     }
     if (s.connected) start(); else s.once('connect', start)
-    return () => { s.off('room:state', onState); s.off('connect_error'); s.off('connect'); s.emit('game:leave') }
+    return () => { s.off('room:state', onState); s.off('connect_error'); s.off('connect'); s.off('disconnect'); s.emit('game:leave') }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 250); return () => clearInterval(t) }, [])
@@ -187,7 +191,7 @@ function PvpGame({ user, setup, onExit, onReview }: Props & { setup: Exclude<Gam
   const { cards, selectedId, setSelectedId } = useHand(room?.fen ?? '', myTurn)
 
   const clockFor = (c: 'w' | 'b') => {
-    if (!room) return null
+    if (!room || !room.clocks) return null
     const base = room.clocks[c]
     return playing && room.turn === c && moves.length >= 2 ? Math.max(0, base - (now - receivedAt.current)) : base
   }
@@ -251,6 +255,7 @@ function PvpGame({ user, setup, onExit, onReview }: Props & { setup: Exclude<Gam
             <button className="btn-gold !py-1 !px-3 !min-h-[34px] !text-xs" onClick={() => getSocket().emit('game:offerDraw')}>Accept</button>
             <button className="btn-ghost !min-h-[34px]" onClick={() => getSocket().emit('game:declineDraw')}>Decline</button></div></div>
         )}
+        {!connected && <div role="status" className="absolute top-2 inset-x-2 z-10 text-center text-sm text-amber-100 bg-amber-900/90 rounded-lg py-1">Connection lost. Reconnecting…</div>}
         {error && <div role="alert" className="absolute bottom-2 inset-x-2 z-10 text-center text-sm text-red-200 bg-red-950/90 rounded-lg py-1">{error}</div>}
       </>}
       overlay={over && (

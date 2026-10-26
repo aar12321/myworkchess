@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion'
+import { forwardRef } from 'react'
 import type { Card } from '../engine/hand'
 
 const FILES = 'abcdefgh'
@@ -26,12 +27,12 @@ function Diagram({ card }: { card: Card }) {
 
 interface Props { card: Card; selected: boolean; onSelect: () => void; index: number; total: number; compact?: boolean; showBest?: boolean }
 
-export function MoveCard({ card, selected, onSelect, index, total, compact, showBest }: Props) {
+export const MoveCard = forwardRef<HTMLButtonElement, Props>(function MoveCard({ card, selected, onSelect, index, total, compact, showBest }, ref) {
   const mid = (total - 1) / 2
   const fan = (index - mid) * (compact ? 0 : 3.2)
   return (
     <motion.button
-      type="button" data-card={card.san} aria-pressed={selected} onClick={onSelect}
+      ref={ref} type="button" data-card={card.san} aria-pressed={selected} onClick={onSelect}
       className={`hand-card ${selected ? 'card-selected' : ''} relative shrink-0 text-left outline-none focus-visible:ring-4 ring-gold-400 rounded-[14px]`}
       style={{ zIndex: selected ? 20 : index, transformOrigin: '50% 120%' }}
       initial={{ y: 220, opacity: 0, rotate: -12, scale: .8 }}
@@ -57,7 +58,7 @@ export function MoveCard({ card, selected, onSelect, index, total, compact, show
       </div>
     </motion.button>
   )
-}
+})
 
 export function CardBack({ compact, loading }: { compact?: boolean; loading?: boolean }) {
   return (

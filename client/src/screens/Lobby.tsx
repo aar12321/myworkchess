@@ -5,16 +5,23 @@ import { LEVELS, type Level } from '../engine/ai'
 import { Avatar } from '../components/PlayerBar'
 
 export type GameSetup =
-  | { kind: 'ai'; level: Level; color: 'w' | 'b' }
+  | { kind: 'ai'; level: Level; color: 'w' | 'b'; minutes: number } // minutes 0 = no timer
   | { kind: 'create'; minutes: number; color: 'w' | 'b' | 'random' }
   | { kind: 'join'; code: string }
 
-interface Props { user: User; onStart: (s: GameSetup) => void; onHistory: () => void; onLogout: () => void; initialCode?: string }
+interface Props { user: User; onStart: (s: GameSetup) => void; onHistory: () => void; onLogout: () => void; initialCode?: string; activeRoom?: { code: string; status: string } | null }
 
-export function Lobby({ user, onStart, onHistory, onLogout, initialCode }: Props) {
+export function Lobby({ user, onStart, onHistory, onLogout, initialCode, activeRoom }: Props) {
   const [color, setColor] = useState<'w' | 'b' | 'random'>('w')
   const [minutes, setMinutes] = useState(10)
   const [code, setCode] = useState(initialCode ?? '')
+  const Times = (
+    <div className="flex gap-2" role="radiogroup" aria-label="Time per side">
+      {[0, 3, 5, 10, 15].map(m => (
+        <button key={m} role="radio" aria-checked={minutes === m} data-testid={`time-${m}`} onClick={() => setMinutes(m)} className={`flex-1 py-2 rounded-lg font-display text-xs sm:text-sm tracking-wide border ${minutes === m ? 'bg-gold-500 text-bark-900 border-gold-300' : 'bg-black/30 border-gold-500/30'}`}>{m === 0 ? 'No timer' : `${m}m`}</button>
+      ))}
+    </div>
+  )
   const resolve = (c: 'w' | 'b' | 'random') => (c === 'random' ? (Math.random() < .5 ? 'w' : 'b') : c)
   const Colors = (
     <div className="flex gap-2" role="radiogroup" aria-label="Your colour">
@@ -33,16 +40,25 @@ export function Lobby({ user, onStart, onHistory, onLogout, initialCode }: Props
           <div className="flex gap-2"><button className="btn-ghost" onClick={onHistory}>My games</button><button className="btn-ghost" onClick={onLogout}>Sign out</button></div>
         </header>
 
+        {activeRoom && (
+          <motion.div {...rise(0)} className="panel p-4 mb-5 flex flex-wrap items-center justify-between gap-3" data-testid="resume-banner">
+            <div><div className="font-display text-gold-300">You have a friend game in progress</div>
+              <div className="text-sm text-parch-200">Room <b className="tracking-widest">{activeRoom.code}</b> · {activeRoom.status === 'waiting' ? 'waiting for your friend' : 'game on'}</div></div>
+            <button className="btn-gold !py-2" data-testid="resume-room" onClick={() => onStart({ kind: 'join', code: activeRoom.code })}>Resume</button>
+          </motion.div>
+        )}
         <motion.h1 {...rise(0)} className="font-display font-black text-4xl sm:text-5xl text-center gold-text mb-1">Knight's Hand</motion.h1>
         <motion.p {...rise(1)} className="text-center text-parch-200 mb-8">Each turn you're dealt the five best moves. Choose wisely.</motion.p>
 
         <motion.section {...rise(2)} className="panel p-5 mb-5">
           <h2 className="font-display text-xl text-gold-300 mb-1">Play the computer</h2>
-          <p className="text-parch-300 text-sm mb-3">Play as</p>
-          <div className="max-w-sm mb-4">{Colors}</div>
+          <p className="text-parch-300 text-sm mb-1">Play as</p>
+          <div className="max-w-sm mb-3">{Colors}</div>
+          <p className="text-parch-300 text-sm mb-1">Time per side</p>
+          <div className="max-w-md mb-4">{Times}</div>
           <div className="grid sm:grid-cols-3 gap-3">
             {(Object.keys(LEVELS) as Level[]).map((lv, i) => (
-              <motion.button key={lv} data-testid={`ai-${lv}`} whileHover={{ y: -6, scale: 1.02 }} whileTap={{ scale: .97 }} onClick={() => onStart({ kind: 'ai', level: lv, color: resolve(color) })}
+              <motion.button key={lv} data-testid={`ai-${lv}`} whileHover={{ y: -6, scale: 1.02 }} whileTap={{ scale: .97 }} onClick={() => onStart({ kind: 'ai', level: lv, color: resolve(color), minutes })}
                 className="card-face text-left p-4 cursor-pointer" style={{ minHeight: 120 }}>
                 <div className="flex items-center justify-between"><span className="font-black text-xl">{LEVELS[lv].label}</span><span className="text-xs font-bold opacity-70">{LEVELS[lv].elo}</span></div>
                 <div className="flex gap-1 my-1">{[0, 1, 2].map(n => <span key={n} className={n <= i ? 'text-amber-700' : 'text-stone-400/60'}>♞</span>)}</div>
@@ -57,7 +73,7 @@ export function Lobby({ user, onStart, onHistory, onLogout, initialCode }: Props
             <h2 className="font-display text-xl text-gold-300 mb-3">Host a game</h2>
             <p className="text-parch-300 text-sm mb-1">Your colour</p><div className="mb-3">{Colors}</div>
             <p className="text-parch-300 text-sm mb-1">Time per side</p>
-            <div className="flex gap-2 mb-4">{[3, 5, 10, 15].map(m => <button key={m} onClick={() => setMinutes(m)} className={`flex-1 py-2 rounded-lg font-display border ${minutes === m ? 'bg-gold-500 text-bark-900 border-gold-300' : 'bg-black/30 border-gold-500/30'}`}>{m}m</button>)}</div>
+            <div className="mb-4">{Times}</div>
             <button className="btn-gold w-full" data-testid="create-room" onClick={() => onStart({ kind: 'create', minutes, color })}>Create room</button>
             <p className="text-xs text-parch-300/80 mt-2">You'll get a 6-letter code to share with your friend.</p>
           </motion.section>
