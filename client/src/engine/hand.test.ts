@@ -33,3 +33,22 @@ describe('buildHandFromLines', () => {
     expect(hand[0].san).toBe('O-O')
   })
 })
+
+describe('hand without an engine (fallback)', () => {
+  it('still deals five legal, sensible cards from the start position', () => {
+    const fen = new Chess().fen()
+    const hand = buildHandFromLines(fen, [])
+    expect(hand.length).toBe(5)
+    const legal = new Set(new Chess(fen).moves())
+    expect(hand.every(c => legal.has(c.san))).toBe(true)
+  })
+  it('puts a free queen capture in the hand', () => {
+    // White rook can take an undefended black queen on d8.
+    const fen = '3qk3/8/8/8/8/8/8/3RK3 w - - 0 1'
+    for (let i = 0; i < 20; i++) expect(buildHandFromLines(fen, []).some(c => c.san === 'Rxd8+')).toBe(true)
+  })
+  it('prefers mate in one over everything else', () => {
+    const fen = '6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1'
+    for (let i = 0; i < 20; i++) expect(buildHandFromLines(fen, []).some(c => c.san === 'Ra8#')).toBe(true)
+  })
+})

@@ -104,3 +104,9 @@ button { font-family: inherit; }
 @media (max-width: 639px) {
   .btn-ghost { padding: .35rem .65rem; min-height: 36px; font-size: .65rem; letter-spacing: .06em; }
 }
+
+/* Notch / rounded-corner safe areas */
+.safe-x { padding-left: max(.5rem, env(safe-area-inset-left)); padding-right: max(.5rem, env(safe-area-inset-right)); }
+.safe-t { padding-top: max(.25rem, env(safe-area-inset-top)); }
+.rotate-hint { display: none; }
+@media (orientation: landscape) and (max-height: 520px) { .rotate-hint { display: flex; } }

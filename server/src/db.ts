@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import bcrypt from 'bcryptjs'
 import fs from 'node:fs'
 import path from 'node:path'
+import { Chess } from 'chess.js'
 
 export function openDb(file = process.env.DB_FILE || 'data/chess.db') {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -28,7 +29,7 @@ export function openDb(file = process.env.DB_FILE || 'data/chess.db') {
     CREATE INDEX IF NOT EXISTS games_black ON games(black_id);
   `)
   // Seed the demo account (username "demo", password "1234").
-  if (!db.prepare('SELECT 1 FROM users WHERE username = ?').get('demo')) {
+  if (process.env.SEED_DEMO !== '0' && !db.prepare('SELECT 1 FROM users WHERE username = ?').get('demo')) {
     db.prepare('INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)')
       .run('demo', bcrypt.hashSync('1234', 10), Date.now())
   }
@@ -43,8 +44,25 @@ export interface GameRecord {
   startedAt: number; endedAt: number
 }
 
+/** Adds the standard PGN tag pairs so a saved game opens cleanly in Lichess/other tools. */
+export function withHeaders(pgn: string, g: Pick<GameRecord, 'whiteLabel' | 'blackLabel' | 'result' | 'termination' | 'endedAt'>): string {
+  try {
+    const c = new Chess()
+    c.loadPgn(pgn)
+    const d = new Date(g.endedAt)
+    c.setHeader('Event', "Knight's Hand")
+    c.setHeader('Site', 'Knight\'s Hand')
+    c.setHeader('Date', `${d.getUTCFullYear()}.${String(d.getUTCMonth() + 1).padStart(2, '0')}.${String(d.getUTCDate()).padStart(2, '0')}`)
+    c.setHeader('White', g.whiteLabel)
+    c.setHeader('Black', g.blackLabel)
+    c.setHeader('Result', g.result)
+    c.setHeader('Termination', g.termination)
+    return c.pgn()
+  } catch { return pgn }
+}
+
 export function saveGame(db: Db, g: GameRecord): number {
   const r = db.prepare(`INSERT INTO games (white_id, black_id, white_label, black_label, mode, result, termination, pgn, started_at, ended_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(g.whiteId, g.blackId, g.whiteLabel, g.blackLabel, g.mode, g.result, g.termination, g.pgn, g.startedAt, g.endedAt)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(g.whiteId, g.blackId, g.whiteLabel, g.blackLabel, g.mode, g.result, g.termination, withHeaders(g.pgn, g), g.startedAt, g.endedAt)
   return Number(r.lastInsertRowid)
 }

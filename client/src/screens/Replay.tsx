@@ -5,6 +5,7 @@ import { MoveHistory } from '../components/MoveHistory'
 import { Avatar } from '../components/PlayerBar'
 import { movesFromPgn } from '../tracker'
 import { sfx } from '../sfx'
+import { RotateHint } from '../components/RotateHint'
 
 export function Replay({ id, user, onBack }: { id: number; user: User; onBack: () => void }) {
   const [game, setGame] = useState<GameFull | null>(null)
@@ -14,6 +15,12 @@ export function Replay({ id, user, onBack }: { id: number; user: User; onBack: (
   useEffect(() => { api.getGame(id).then(g => { setGame(g); setPly(0) }).catch(e => setErr(e.message)) }, [id])
   const moves = useMemo(() => (game ? movesFromPgn(game.pgn) : []), [game])
   const orientation = game && game.blackId === user.id ? 'b' : 'w'
+  const [copied, setCopied] = useState(false)
+  const copyPgn = async () => { try { await navigator.clipboard.writeText(game!.pgn); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { window.prompt('Copy the PGN:', game!.pgn) } }
+  const downloadPgn = () => {
+    const url = URL.createObjectURL(new Blob([game!.pgn + '\n'], { type: 'application/x-chess-pgn' }))
+    const a = document.createElement('a'); a.href = url; a.download = `knights-hand-${game!.id}.pgn`; a.click(); URL.revokeObjectURL(url)
+  }
 
   const go = (n: number) => setPly(p => { const v = Math.max(0, Math.min(moves.length, typeof n === 'number' ? n : p)); if (v !== p && v > 0) (moves[v - 1].captured ? sfx.capture : sfx.move)(); return v })
   useEffect(() => {
@@ -58,7 +65,12 @@ export function Replay({ id, user, onBack }: { id: number; user: User; onBack: (
           <button className="btn-ghost" onClick={() => go(ply + 1)} aria-label="Next">▶</button>
           <button className="btn-ghost" onClick={() => go(moves.length)} aria-label="Last">⏭</button>
         </div>
+        <div className="flex gap-2">
+          <button className="btn-ghost" data-testid="copy-pgn" onClick={copyPgn}>{copied ? 'Copied!' : 'Copy PGN'}</button>
+          <button className="btn-ghost" data-testid="download-pgn" onClick={downloadPgn}>Download PGN</button>
+        </div>
       </footer>
+      <RotateHint />
     </div>
   )
 }

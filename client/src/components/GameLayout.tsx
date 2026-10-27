@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { Move } from 'chess.js'
 import type { Card } from '../engine/hand'
 import { Board } from './Board'
@@ -7,7 +7,38 @@ import { Hand } from './Hand'
 import { CardBack } from './MoveCard'
 import { MoveHistory } from './MoveHistory'
 import { PlayerBar, type PlayerInfo } from './PlayerBar'
-import { isMuted, setMuted } from '../sfx'
+import { isMuted, setMuted, sfx } from '../sfx'
+import { RotateHint } from './RotateHint'
+
+export interface Action { label: string; onClick: () => void; testId?: string; disabled?: boolean }
+
+function useWide() {
+  const q = '(min-width: 640px)'
+  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
+  useEffect(() => { const m = window.matchMedia(q); const f = () => setWide(m.matches); m.addEventListener('change', f); return () => m.removeEventListener('change', f) }, [])
+  return wide
+}
+
+/** Game actions (Resign, Draw…). Inline on wide screens; several actions collapse into a "⋯" menu on phones so the header never overflows. */
+function Actions({ actions }: { actions: Action[] }) {
+  const wide = useWide()
+  const [open, setOpen] = useState(false)
+  if (actions.length === 0) return null
+  if (wide || actions.length === 1) return <>{actions.map(a => <button key={a.label} className="btn-ghost whitespace-nowrap" data-testid={a.testId} disabled={a.disabled} onClick={a.onClick}>{a.label}</button>)}</>
+  return (
+    <div className="relative">
+      <button className="btn-ghost" data-testid="game-menu" aria-haspopup="menu" aria-expanded={open} aria-label="Game menu" onClick={() => setOpen(o => !o)}>⋯</button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div role="menu" className="panel absolute right-0 top-full mt-1 z-40 p-2 flex flex-col gap-2 min-w-[150px]">
+            {actions.map(a => <button key={a.label} role="menuitem" className="btn-ghost !min-h-[44px] text-left" data-testid={a.testId} disabled={a.disabled} onClick={() => { setOpen(false); a.onClick() }}>{a.label}</button>)}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 interface Props {
   moves: Move[]
@@ -25,9 +56,10 @@ interface Props {
   statusSub: string
   showBest: boolean
   onBack: () => void
-  menu?: ReactNode
+  actions?: Action[]
   overlay?: ReactNode
   boardOverlay?: ReactNode
+  notice?: string
 }
 
 export function GameLayout(p: Props) {
@@ -38,7 +70,7 @@ export function GameLayout(p: Props) {
 
   return (
     <div className="h-[100dvh] flex flex-col table-bg overflow-hidden" style={{ paddingBottom: 'var(--safe-b)' }}>
-      <header className="flex items-center justify-between px-2 sm:px-3 py-1 sm:py-2 gap-2">
+      <header className="safe-x safe-t relative flex items-center justify-between px-2 sm:px-3 py-1 sm:py-2 gap-2">
         <button className="btn-ghost whitespace-nowrap" onClick={p.onBack} aria-label="Back to lobby">←<span className="hidden sm:inline"> Lobby</span></button>
         <div className="lg:hidden whitespace-nowrap font-display text-xs sm:text-sm text-gold-300 text-center px-3 py-1 rounded-full border border-gold-500/50 bg-black/50" data-testid="status-mobile">
           {p.statusTitle}
@@ -46,10 +78,11 @@ export function GameLayout(p: Props) {
         <div className="flex gap-1.5 sm:gap-2">
           <button className="btn-ghost lg:hidden" onClick={() => setDrawer(true)}>Moves</button>
           <button className="btn-ghost" onClick={() => { setMuted(!muted); setM(!muted) }} aria-label="Toggle sound">{muted ? '🔇' : '🔊'}</button>
-          {p.menu}
+          <Actions actions={p.actions ?? []} />
         </div>
       </header>
 
+      {p.notice && <div role="status" className="mx-3 mb-1 text-center text-xs sm:text-sm text-amber-100 bg-amber-900/80 border border-amber-500/40 rounded-lg py-1 px-2">{p.notice}</div>}
       <div className="flex-1 min-h-0 flex gap-4 px-1 sm:px-3 lg:px-6">
         <aside className="hidden lg:block w-60 xl:w-72 py-2 self-stretch max-h-[420px] mt-10"><MoveHistory sans={sans} /></aside>
 
@@ -83,7 +116,7 @@ export function GameLayout(p: Props) {
             {[3, 2, 1, 0].map(i => <div key={i} className="absolute" style={{ left: i * 3, top: -i * 3 }}><CardBack compact /></div>)}
           </div>
         </div>
-        <div className="flex-1 min-w-0 h-full order-2 lg:order-none"><Hand cards={p.cards} selectedId={p.selectedId} onSelect={id => p.onSelect(p.selectedId === id ? null : id)} waiting={p.myTurn} showBest={p.showBest} /></div>
+        <div className="flex-1 min-w-0 h-full order-2 lg:order-none"><Hand cards={p.cards} selectedId={p.selectedId} onSelect={id => { if (p.selectedId !== id) sfx.select(); p.onSelect(p.selectedId === id ? null : id) }} waiting={p.myTurn} showBest={p.showBest} /></div>
         <div className="shrink-0 lg:w-56 flex lg:justify-end lg:pb-6 order-1 lg:order-none px-2 pt-1">
           <button className="btn-gold w-full lg:w-auto lg:min-w-[190px] !py-2 !min-h-[44px] lg:!py-[.85rem] lg:!min-h-[48px]" data-testid="play-move" disabled={!p.myTurn || !selected} onClick={p.onPlay}>
             {selected ? `Play ${selected.san}` : 'Play Move'}
@@ -101,6 +134,7 @@ export function GameLayout(p: Props) {
         )}
       </AnimatePresence>
       {p.overlay}
+      <RotateHint />
     </div>
   )
 }

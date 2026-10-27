@@ -18,8 +18,8 @@ test('play an Easy AI game with cards, resign, and find it in My games + replay'
   if (SHOTS) await page.waitForTimeout(1500)
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/ai-mid-${page.viewportSize()!.width}.png` })
 
-  page.once('dialog', d => d.accept())
   await page.getByTestId('resign').click()
+  await page.getByTestId('confirm-yes').click()
   await expect(page.getByTestId('game-over')).toBeVisible()
   await expect(page.getByTestId('game-over')).toContainText('Defeat')
   if (SHOTS) await page.waitForTimeout(1500)

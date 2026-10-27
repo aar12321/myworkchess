@@ -3,15 +3,16 @@ import { useState } from 'react'
 import type { User } from '../api'
 import { LEVELS, type Level } from '../engine/ai'
 import { Avatar } from '../components/PlayerBar'
+import type { SavedAi } from '../aiSave'
 
 export type GameSetup =
-  | { kind: 'ai'; level: Level; color: 'w' | 'b'; minutes: number } // minutes 0 = no timer
+  | { kind: 'ai'; level: Level; color: 'w' | 'b'; minutes: number; resume?: boolean } // minutes 0 = no timer
   | { kind: 'create'; minutes: number; color: 'w' | 'b' | 'random' }
   | { kind: 'join'; code: string }
 
-interface Props { user: User; onStart: (s: GameSetup) => void; onHistory: () => void; onLogout: () => void; initialCode?: string; activeRoom?: { code: string; status: string } | null }
+interface Props { user: User; onStart: (s: GameSetup) => void; onHistory: () => void; onLogout: () => void; initialCode?: string; activeRoom?: { code: string; status: string } | null; savedAi?: SavedAi | null; onDiscardAi?: () => void }
 
-export function Lobby({ user, onStart, onHistory, onLogout, initialCode, activeRoom }: Props) {
+export function Lobby({ user, onStart, onHistory, onLogout, initialCode, activeRoom, savedAi, onDiscardAi }: Props) {
   const [color, setColor] = useState<'w' | 'b' | 'random'>('w')
   const [minutes, setMinutes] = useState(10)
   const [code, setCode] = useState(initialCode ?? '')
@@ -40,6 +41,14 @@ export function Lobby({ user, onStart, onHistory, onLogout, initialCode, activeR
           <div className="flex gap-2"><button className="btn-ghost" onClick={onHistory}>My games</button><button className="btn-ghost" onClick={onLogout}>Sign out</button></div>
         </header>
 
+        {savedAi && (
+          <motion.div {...rise(0)} className="panel p-4 mb-5 flex flex-wrap items-center justify-between gap-3" data-testid="resume-ai-banner">
+            <div><div className="font-display text-gold-300">You have an unfinished game against the {LEVELS[savedAi.level].label} computer</div>
+              <div className="text-sm text-parch-200">{savedAi.pgn.split(/\s+/).filter(t => t && !t.endsWith('.')).length} moves played</div></div>
+            <div className="flex gap-2"><button className="btn-ghost" onClick={onDiscardAi}>Discard</button>
+              <button className="btn-gold !py-2" data-testid="resume-ai" onClick={() => onStart({ kind: 'ai', level: savedAi.level, color: savedAi.color, minutes: savedAi.minutes, resume: true })}>Resume</button></div>
+          </motion.div>
+        )}
         {activeRoom && (
           <motion.div {...rise(0)} className="panel p-4 mb-5 flex flex-wrap items-center justify-between gap-3" data-testid="resume-banner">
             <div><div className="font-display text-gold-300">You have a friend game in progress</div>

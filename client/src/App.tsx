@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type User } from './api'
+import { clearAi, loadAi, type SavedAi } from './aiSave'
+import { engine } from './engine/stockfish'
 import { closeSocket } from './socket'
 import { Auth } from './screens/Auth'
 import { Game } from './screens/Game'
@@ -13,16 +15,22 @@ export default function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
   const [screen, setScreen] = useState<Screen>({ name: 'lobby' })
   const [activeRoom, setActiveRoom] = useState<{ code: string; status: string } | null>(null)
-  const [invite] = useState(() => new URLSearchParams(location.search).get('room')?.toUpperCase().slice(0, 6) ?? '')
+  const [savedAi, setSavedAi] = useState<SavedAi | null>(null)
+  const [invite, setInvite] = useState(() => new URLSearchParams(location.search).get('room')?.toUpperCase().slice(0, 6) ?? '')
 
   useEffect(() => { api.me().then(setUser) }, [])
   const onLobby = user && screen.name === 'lobby'
-  useEffect(() => { if (onLobby) api.activeRoom().then(setActiveRoom) }, [onLobby])
+  useEffect(() => { if (onLobby) { api.activeRoom().then(setActiveRoom); setSavedAi(user ? loadAi(user.id) : null) } }, [onLobby]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (user) engine.preload() }, [user]) // start fetching the engine before the first game
   if (user === undefined) return <div className="min-h-[100dvh] table-bg flex items-center justify-center text-5xl">♞</div>
   if (!user) return <Auth onAuth={u => { setUser(u); setScreen({ name: 'lobby' }) }} />
 
   const lobby = () => { if (invite) history.replaceState(null, '', '/'); setScreen({ name: 'lobby' }) }
-  const start = (setup: GameSetup) => setScreen({ name: 'game', setup, key: Date.now() })
+  const start = (setup: GameSetup) => {
+    if (setup.kind === 'ai' && !setup.resume) clearAi(user.id) // a fresh game replaces any unfinished one
+    setInvite('')
+    setScreen({ name: 'game', setup, key: Date.now() })
+  }
 
   switch (screen.name) {
     case 'game':
@@ -32,7 +40,7 @@ export default function App() {
     case 'replay':
       return <Replay id={screen.id} user={user} onBack={() => setScreen(screen.from === 'history' ? { name: 'history' } : { name: 'lobby' })} />
     default:
-      return <Lobby user={user} initialCode={invite} activeRoom={activeRoom} onStart={start} onHistory={() => setScreen({ name: 'history' })}
+      return <Lobby user={user} initialCode={invite} activeRoom={activeRoom} savedAi={savedAi} onDiscardAi={() => { clearAi(user.id); setSavedAi(null) }} onStart={start} onHistory={() => setScreen({ name: 'history' })}
         onLogout={async () => { await api.logout(); closeSocket(); setUser(null) }} />
   }
 }

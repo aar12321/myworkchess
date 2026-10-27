@@ -1,5 +1,6 @@
 import { Chess, type Move, type PieceSymbol } from 'chess.js'
 import { engine, type EngineLine } from './stockfish'
+import { rankMoves } from './fallback'
 
 export interface Card {
   id: string
@@ -54,7 +55,7 @@ export function buildHandFromLines(fen: string, lines: EngineLine[], n = 5, shuf
     if (cards.length === n) break
   }
   // Fewer than n engine lines (rare): top up with remaining legal moves, queens before under-promotions.
-  for (const m of legal) {
+  for (const m of rankMoves(fen)) {
     if (cards.length >= n) break
     const id = `${m.from}${m.to}${m.promotion ?? ''}`
     if (seen.has(id) || (m.promotion && m.promotion !== 'q')) continue
@@ -65,9 +66,16 @@ export function buildHandFromLines(fen: string, lines: EngineLine[], n = 5, shuf
   return cards
 }
 
-export async function dealHand(fen: string, depth = 10): Promise<Card[]> {
+export interface Hand { cards: Card[]; degraded: boolean }
+
+/** Deal five cards. If the engine can't be reached, deal from a simple heuristic instead of leaving the player stuck. */
+export async function dealHand(fen: string, depth = 10): Promise<Hand> {
   const legalCount = new Chess(fen).moves().length
-  if (legalCount === 0) return []
-  const lines = await engine.search(fen, { multiPv: Math.min(5, legalCount), depth, skill: 20, movetime: 1500 })
-  return buildHandFromLines(fen, lines)
+  if (legalCount === 0) return { cards: [], degraded: false }
+  try {
+    const lines = await engine.search(fen, { multiPv: Math.min(5, legalCount), depth, skill: 20, movetime: 1500 })
+    return { cards: buildHandFromLines(fen, lines), degraded: false }
+  } catch {
+    return { cards: buildHandFromLines(fen, []), degraded: true }
+  }
 }

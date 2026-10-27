@@ -4,6 +4,15 @@ let muted = (() => { try { return localStorage.getItem('mwc_muted') === '1' } ca
 export const isMuted = () => muted
 export function setMuted(m: boolean) { muted = m; try { localStorage.setItem('mwc_muted', m ? '1' : '0') } catch { /* ignore */ } }
 
+// Mobile browsers only allow audio after a user gesture; unlock on the first tap so later (async) sounds can play.
+if (typeof window !== 'undefined') {
+  const unlock = () => {
+    try { ctx ??= new (window.AudioContext || (window as any).webkitAudioContext)(); if (ctx.state === 'suspended') void ctx.resume() } catch { /* audio unavailable */ }
+    window.removeEventListener('pointerdown', unlock)
+  }
+  window.addEventListener('pointerdown', unlock)
+}
+
 function tone(freq: number, dur: number, type: OscillatorType = 'sine', gain = 0.08, delay = 0, slide = 0) {
   if (muted) return
   try {

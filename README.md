@@ -22,13 +22,26 @@ npm run build
 PORT=3000 JWT_SECRET=change-me npm start
 ```
 
-Env: `PORT`, `JWT_SECRET` (set in production), `DB_FILE` (default `server/data/chess.db`, SQLite), `INSECURE_COOKIES=1` only if serving production over plain http.
+Environment (server):
+
+| Variable | Purpose |
+|---|---|
+| `PORT` | Port to listen on (default 3001). |
+| `JWT_SECRET` | **Required when `NODE_ENV=production`** (the server refuses to start without it). |
+| `DB_FILE` | SQLite file (default `server/data/chess.db`). Use a persistent disk when hosting. |
+| `SEED_DEMO=0` | Don't create the public `demo` / `1234` account (do this for a public deployment). |
+| `TRUST_PROXY=1` | Set when behind a reverse proxy so rate limits see real client IPs. |
+| `INSECURE_COOKIES=1` | Only if serving a production build over plain http. |
+| `LOGIN_FAIL_MAX`, `REGISTER_MAX` | Failed-login limit per 15 min (default 10) and sign-ups per hour (default 20) per IP. |
+| `ABANDON_MS` | How long a running friend game with both players gone survives before it is ended as abandoned (default 10 min). |
+
+Notes: friend-game rooms live in server memory, so a server restart ends live friend games. Unfinished AI games are kept in the browser (localStorage) and can be resumed from the lobby.
 
 ## Tests
 
 ```bash
-npm test          # server (auth, games, rooms) + client (card hand) unit tests
-npm run e2e       # Playwright: auth, AI game, two-player game, phone layout
+npm test          # server (auth, games, rooms, rate limits) + client (card hand, piece tracker) unit tests
+npm run e2e       # Playwright: auth, AI games, friend games, resume, engine-failure fallback, phone layout
 ```
 Playwright uses the preinstalled Chromium (`CHROMIUM_PATH` to override). Set `SHOTS_DIR` to save screenshots.
 

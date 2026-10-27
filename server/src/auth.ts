@@ -2,9 +2,12 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { z } from 'zod'
+import { rateLimit } from 'express-rate-limit'
 import type { Db } from './db.js'
 
 export const COOKIE = 'mwc_token'
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET)
+  throw new Error('JWT_SECRET must be set when NODE_ENV=production')
 const SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me'
 
 export interface AuthUser { id: number; username: string }
@@ -40,8 +43,11 @@ function setCookie(res: Response, u: AuthUser) {
 
 export function authRouter(db: Db) {
   const r = Router()
+  // Only failed logins count, so normal use is never throttled but password guessing is.
+  const loginLimit = rateLimit({ windowMs: 15 * 60_000, limit: Number(process.env.LOGIN_FAIL_MAX) || 10, skipSuccessfulRequests: true, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many failed attempts. Try again in a few minutes.' } })
+  const registerLimit = rateLimit({ windowMs: 60 * 60_000, limit: Number(process.env.REGISTER_MAX) || 20, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many accounts created from this network. Try again later.' } })
 
-  r.post('/register', (req, res) => {
+  r.post('/register', registerLimit, (req, res) => {
     const p = creds.safeParse(req.body)
     if (!p.success) return res.status(400).json({ error: p.error.issues[0].message })
     const { username, password } = p.data
@@ -54,7 +60,7 @@ export function authRouter(db: Db) {
     res.status(201).json({ user })
   })
 
-  r.post('/login', (req, res) => {
+  r.post('/login', loginLimit, (req, res) => {
     const p = creds.safeParse(req.body)
     if (!p.success) return res.status(400).json({ error: 'Enter your username and password' })
     const row = db.prepare('SELECT id, username, password_hash FROM users WHERE username = ?').get(p.data.username) as

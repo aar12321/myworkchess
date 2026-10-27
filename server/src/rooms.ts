@@ -25,6 +25,7 @@ interface Room {
   gameId?: number
   timer?: NodeJS.Timeout
   expiry?: NodeJS.Timeout
+  abandon?: NodeJS.Timeout
 }
 
 const createSchema = z.object({
@@ -42,6 +43,7 @@ export function attachRooms(io: Server, db: Db) {
   const dropRoom = (room: Room) => {
     if (room.timer) clearInterval(room.timer)
     if (room.expiry) clearTimeout(room.expiry)
+    if (room.abandon) clearTimeout(room.abandon)
     rooms.delete(room.code)
   }
 
@@ -97,11 +99,14 @@ export function attachRooms(io: Server, db: Db) {
     room.termination = termination
     if (room.timer) clearInterval(room.timer)
     if (room.expiry) clearTimeout(room.expiry)
-    room.gameId = saveGame(db, {
-      whiteId: room.white!.user.id, blackId: room.black!.user.id,
-      whiteLabel: room.white!.user.username, blackLabel: room.black!.user.username,
-      mode: 'pvp', result, termination, pgn: room.chess.pgn(), startedAt: room.startedAt, endedAt: Date.now(),
-    })
+    if (room.abandon) clearTimeout(room.abandon)
+    try {
+      room.gameId = saveGame(db, {
+        whiteId: room.white!.user.id, blackId: room.black!.user.id,
+        whiteLabel: room.white!.user.username, blackLabel: room.black!.user.username,
+        mode: 'pvp', result, termination, pgn: room.chess.pgn(), startedAt: room.startedAt, endedAt: Date.now(),
+      })
+    } catch (err) { console.error('[rooms] could not save finished game:', err) } // players still see the result
     broadcast(room)
     setTimeout(() => dropRoom(room), 10 * 60_000).unref()
   }
@@ -109,7 +114,7 @@ export function attachRooms(io: Server, db: Db) {
   function startClock(room: Room) {
     room.lastTick = Date.now()
     if (!room.clocks) return // untimed game
-    room.timer = setInterval(() => {
+    room.timer = setInterval(() => { try {
       if (room.status !== 'playing' || !room.clocks) return
       // Clock only runs once both sides have moved.
       if (room.chess.history().length < 2) { room.lastTick = Date.now(); return }
@@ -119,7 +124,18 @@ export function attachRooms(io: Server, db: Db) {
         room.clocks[turn] = 0
         finish(room, turn === 'w' ? '0-1' : '1-0', 'timeout')
       } else broadcast(room)
-    }, 1000)
+    } catch (err) { console.error('[rooms] clock tick failed:', err) } }, 1000)
+  }
+
+  const ABANDON_MS = Number(process.env.ABANDON_MS) || 10 * 60_000
+  /** A playing room with both seats offline for ABANDON_MS is ended as a draw ("abandoned") so it can't linger forever. */
+  function watchAbandon(room: Room) {
+    if (room.status !== 'playing' || room.white?.socketId || room.black?.socketId || room.abandon) return
+    room.abandon = setTimeout(() => {
+      room.abandon = undefined
+      if (room.status === 'playing' && !room.white?.socketId && !room.black?.socketId) finish(room, '1/2-1/2', 'abandoned')
+    }, ABANDON_MS)
+    room.abandon.unref()
   }
 
   function makeCode() {
@@ -133,17 +149,31 @@ export function attachRooms(io: Server, db: Db) {
     const user: AuthUser = socket.data.user
     let current: Room | null = null
 
+    // Every client event goes through here: a bad ack argument or a thrown error must never take the server down,
+    // and a flooding client is told to slow down.
+    let burst = 0
+    const flood = setInterval(() => { burst = 0 }, 10_000)
+    flood.unref()
+    const on = (event: string, handler: (raw: any, ack: (r?: unknown) => void) => void) =>
+      socket.on(event, (raw: unknown, ackRaw: unknown) => {
+        const ack = typeof ackRaw === 'function' ? (ackRaw as (r?: unknown) => void) : () => {}
+        if (++burst > 60) return ack({ error: 'Slow down' })
+        try { handler(raw, ack) } catch (err) { console.error(`[rooms] ${event} failed:`, err); ack({ error: 'Server error' }) }
+      })
+
     const attach = (room: Room, color: 'w' | 'b') => {
       const seat = color === 'w' ? room.white! : room.black!
       seat.socketId = socket.id
       current = room
+      if (room.abandon) { clearTimeout(room.abandon); room.abandon = undefined }
       socket.join(room.code)
     }
 
-    socket.on('room:create', (raw, ack) => {
+    on('room:create', (raw, ack) => {
       const p = createSchema.safeParse(raw ?? {})
       if (!p.success) return ack?.({ error: 'Invalid settings' })
       const color = p.data.color === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : p.data.color
+      for (const old of [...rooms.values()]) if (old.status === 'waiting' && seatOf(old, user.id)) dropRoom(old) // one open room per host
       const room: Room = {
         code: makeCode(), chess: new Chess(), white: null, black: null, hostColor: color,
         clocks: p.data.minutes > 0 ? { w: p.data.minutes * 60_000, b: p.data.minutes * 60_000 } : null,
@@ -161,7 +191,7 @@ export function attachRooms(io: Server, db: Db) {
       broadcast(room)
     })
 
-    socket.on('room:join', (raw, ack) => {
+    on('room:join', (raw, ack) => {
       const code = String(raw?.code ?? '').toUpperCase().trim()
       const room = rooms.get(code)
       if (!room) return ack?.({ error: 'Room not found. Check the code.' })
@@ -187,7 +217,7 @@ export function attachRooms(io: Server, db: Db) {
       broadcast(room)
     })
 
-    socket.on('move:play', (raw, ack) => {
+    on('move:play', (raw, ack) => {
       const room = current
       if (!room || room.status !== 'playing') return ack?.({ error: 'No active game' })
       const color = seatOf(room, user.id)
@@ -211,14 +241,14 @@ export function attachRooms(io: Server, db: Db) {
       broadcast(room)
     })
 
-    socket.on('game:resign', () => {
+    on('game:resign', () => {
       const room = current
       if (!room || room.status !== 'playing') return
       const color = seatOf(room, user.id)
       if (color) finish(room, color === 'w' ? '0-1' : '1-0', 'resignation')
     })
 
-    socket.on('game:offerDraw', () => {
+    on('game:offerDraw', () => {
       const room = current
       if (!room || room.status !== 'playing') return
       const color = seatOf(room, user.id)
@@ -228,11 +258,11 @@ export function attachRooms(io: Server, db: Db) {
       broadcast(room)
     })
 
-    socket.on('game:declineDraw', () => {
+    on('game:declineDraw', () => {
       if (current?.drawOffer) { current.drawOffer = undefined; broadcast(current) }
     })
 
-    socket.on('game:leave', () => {
+    on('game:leave', () => {
       const room = current
       if (!room) return
       socket.leave(room.code)
@@ -240,16 +270,17 @@ export function attachRooms(io: Server, db: Db) {
       const seat = color === 'w' ? room.white : color === 'b' ? room.black : null
       if (seat?.socketId === socket.id) seat.socketId = null
       if (room.status === 'waiting') dropRoom(room) // the host walked away on purpose
-      else if (room.status === 'playing') broadcast(room)
+      else if (room.status === 'playing') { broadcast(room); watchAbandon(room) }
       current = null
     })
 
     socket.on('disconnect', () => {
+      clearInterval(flood)
       const room = current
       if (!room) return
       const color = seatOf(room, user.id)
       const seat = color === 'w' ? room.white : color === 'b' ? room.black : null
-      if (seat && seat.socketId === socket.id) { seat.socketId = null; broadcast(room) }
+      if (seat && seat.socketId === socket.id) { seat.socketId = null; broadcast(room); watchAbandon(room) }
     })
   })
 

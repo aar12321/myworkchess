@@ -35,8 +35,8 @@ test('friend game with No timer: no clocks, moves work', async ({ browser }) => 
   await expect(b.getByTestId('clock-b')).toHaveCount(0)
   await playFirstCard(a)
   await expect(b.locator('[data-card]')).toHaveCount(5, { timeout: 30_000 })
-  a.once('dialog', d => d.accept())
   await a.getByTestId('resign').click()
+  await a.getByTestId('confirm-yes').click()
   await expect(b.getByTestId('game-over')).toContainText('Victory')
 })
 
@@ -63,8 +63,8 @@ test('host closes the page before the friend joins; the room survives and the ho
   await expect(host2.getByTestId('player-b')).toBeVisible()
   await playFirstCard(host2) // white moves, so the resumed seat really works
   await expect(friend.locator('[data-card]')).toHaveCount(5, { timeout: 30_000 })
-  friend.once('dialog', d => d.accept())
-  await friend.getByTestId('resign').click() // leave nothing running for later tests
+  await friend.getByTestId('resign').click()
+  await friend.getByTestId('confirm-yes').click() // leave nothing running for later tests
   await expect(friend.getByTestId('game-over')).toBeVisible()
 })
 

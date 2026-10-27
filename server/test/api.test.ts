@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { createApp } from '../src/app.js'
 import { openDb } from '../src/db.js'
 
+process.env.ABANDON_MS = '400' // abandoned-room test must not wait 10 minutes
 const { app, server } = createApp(openDb(':memory:'))
 let url = ''
 beforeAll(async () => { await new Promise<void>(r => server.listen(0, r)); url = `http://localhost:${(server.address() as AddressInfo).port}` })
@@ -181,5 +182,106 @@ describe('room resilience and untimed games', () => {
     b.socket.emit('game:resign')
     expect((await over).termination).toBe('resignation')
     a.socket.close(); b.socket.close()
+  })
+})
+
+describe('hardening and game flow', () => {
+  const connect = async (username: string, password: string) => {
+    let res = await request(app).post('/api/auth/login').send({ username, password })
+    if (res.status !== 200) res = await request(app).post('/api/auth/register').send({ username, password })
+    const cookie = cookieOf(res)
+    return { cookie, socket: ioc(url, { extraHeaders: { cookie }, forceNew: true }) }
+  }
+  const once = <T,>(s: Socket, ev: string, pred: (d: any) => boolean = () => true) =>
+    new Promise<T>(r => { const h = (d: any) => { if (pred(d)) { s.off(ev, h); r(d) } }; s.on(ev, h) })
+  const emit = <T,>(s: Socket, ev: string, data?: unknown) => new Promise<T>(r => s.emit(ev, data, r))
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+  const startGame = async (a: Awaited<ReturnType<typeof connect>>, b: Awaited<ReturnType<typeof connect>>, opts: object = { color: 'w' }) => {
+    const { code } = await emit<{ code: string }>(a.socket, 'room:create', opts)
+    await emit(b.socket, 'room:join', { code })
+    return code
+  }
+
+  it('survives a client sending a non-function ack or junk payloads', async () => {
+    const a = await connect('demo', '1234')
+    a.socket.emit('room:create', {}, 'not-a-function')
+    a.socket.emit('room:join', null, 42)
+    a.socket.emit('move:play', 'junk', {})
+    a.socket.emit('room:create', { minutes: 'lots' })
+    await sleep(200)
+    expect((await request(app).get('/api/health')).body.ok).toBe(true)
+    const again = await emit<{ code?: string }>(a.socket, 'room:create', { color: 'w' })
+    expect(again.code).toBeTruthy()
+    a.socket.emit('game:leave')
+    a.socket.close()
+  })
+
+  it('a host keeps only one waiting room', async () => {
+    const a = await connect('demo', '1234')
+    const first = await emit<{ code: string }>(a.socket, 'room:create', { color: 'w' })
+    const second = await emit<{ code: string }>(a.socket, 'room:create', { color: 'w' })
+    const b = await connect('friend4', 'secret')
+    expect((await emit<{ error?: string }>(b.socket, 'room:join', { code: first.code })).error).toMatch(/not found/i)
+    expect((await emit<{ error?: string }>(b.socket, 'room:join', { code: second.code })).error).toBeUndefined()
+    a.socket.emit('game:resign')
+    await sleep(100)
+    a.socket.close(); b.socket.close()
+  })
+
+  it('draw offer + accept ends in a draw; decline clears the offer', async () => {
+    const a = await connect('demo', '1234'), b = await connect('friend4', 'secret')
+    await startGame(a, b)
+    const offered = once<any>(b.socket, 'room:state', d => d.drawOffer === 'w')
+    a.socket.emit('game:offerDraw')
+    expect((await offered).drawOffer).toBe('w')
+    const cleared = once<any>(a.socket, 'room:state', d => d.drawOffer === null)
+    b.socket.emit('game:declineDraw')
+    await cleared
+    const over = once<any>(a.socket, 'room:state', d => d.status === 'over')
+    a.socket.emit('game:offerDraw'); await sleep(50); b.socket.emit('game:offerDraw')
+    const end = await over
+    expect(end.result).toBe('1/2-1/2'); expect(end.termination).toBe('agreement')
+    a.socket.close(); b.socket.close()
+  })
+
+  it('a timed game ends on time and the saved PGN carries headers', async () => {
+    const a = await connect('demo', '1234'), b = await connect('friend4', 'secret')
+    await startGame(a, b, { color: 'w', minutes: 0.02 }) // 1.2 seconds
+    const over = once<any>(a.socket, 'room:state', d => d.status === 'over')
+    await emit(a.socket, 'move:play', { from: 'e2', to: 'e4' })
+    await emit(b.socket, 'move:play', { from: 'e7', to: 'e5' }) // clock now runs for White
+    const end = await over
+    expect(end.termination).toBe('timeout'); expect(end.result).toBe('0-1')
+    const g = await request(app).get(`/api/games/${end.gameId}`).set('Cookie', a.cookie)
+    expect(g.body.game.pgn).toContain('[White "demo"]')
+    expect(g.body.game.pgn).toContain('[Result "0-1"]')
+    expect(g.body.game.pgn).toContain('[Termination "timeout"]')
+    a.socket.close(); b.socket.close()
+  })
+
+  it('a playing room that both players leave is ended as abandoned', async () => {
+    const a = await connect('demo', '1234'), b = await connect('friend4', 'secret')
+    const code = await startGame(a, b, { color: 'w', minutes: 0 })
+    const c = ioc(url, { extraHeaders: { cookie: a.cookie }, forceNew: true }) // watcher to read the final state
+    a.socket.close(); b.socket.close()
+    const over = once<any>(c, 'room:state', d => d.status === 'over')
+    await sleep(100)
+    await emit(c, 'room:join', { code }) // demo reconnects, then drops again
+    c.close()
+    const d = ioc(url, { extraHeaders: { cookie: a.cookie }, forceNew: true })
+    await sleep(900)
+    const active = await request(app).get('/api/rooms/active').set('Cookie', a.cookie)
+    expect(active.body.room).toBeNull()
+    d.close(); void over
+  })
+
+  it('throttles repeated failed logins', async () => {
+    const { app: app2 } = createApp(openDb(':memory:'))
+    let last = 0
+    for (let i = 0; i < 12; i++) last = (await request(app2).post('/api/auth/login').send({ username: 'demo', password: 'wrong1' })).status
+    expect(last).toBe(429)
+    // The right password is also refused while throttled, but normal use never trips it.
+    const { app: app3 } = createApp(openDb(':memory:'))
+    for (let i = 0; i < 15; i++) expect((await request(app3).post('/api/auth/login').send({ username: 'demo', password: '1234' })).status).toBe(200)
   })
 })

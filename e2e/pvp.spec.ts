@@ -26,8 +26,8 @@ test('two players: create room, join with the code, play cards, resign, both rec
   await expect(a.locator('[data-card]')).toHaveCount(5, { timeout: 30_000 })
   expect(w1).toBeTruthy()
 
-  a.once('dialog', d => d.accept())
   await a.getByTestId('resign').click()
+  await a.getByTestId('confirm-yes').click()
   await expect(a.getByTestId('game-over')).toContainText('Defeat')
   await expect(b.getByTestId('game-over')).toContainText('Victory')
 
