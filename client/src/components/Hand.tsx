@@ -8,7 +8,7 @@ export function Hand({ cards, selectedId, onSelect, waiting, showBest }: Props) 
   return (
     <div className="relative h-full w-full flex items-end">
       {/* A fanned, overlapping hand; five cards fit across a phone. */}
-      <div className="w-full flex items-end justify-center pt-7 pb-1">
+      <div role="group" aria-label="Your move cards" className="w-full flex items-end justify-center pt-7 pb-1">
         {cards && cards.length > 0 ? (
           <AnimatePresence mode="popLayout">
             {cards.map((c, i) => (

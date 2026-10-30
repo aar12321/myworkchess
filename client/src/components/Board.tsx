@@ -2,6 +2,7 @@ import { motion } from 'framer-motion'
 import { useMemo } from 'react'
 import type { Move } from 'chess.js'
 import { trackPieces } from '../tracker'
+import { squareLabel } from '../a11y'
 import type { Card } from '../engine/hand'
 
 interface Props {
@@ -23,22 +24,27 @@ export function Board({ moves, upto = moves.length, orientation, selected, inChe
   const last = upto > 0 ? moves[upto - 1] : null
   const kingSq = inCheckColor ? pieces.find(p => p.type === 'k' && p.color === inCheckColor && !p.captured)?.square : null
 
-  const squares = []
-  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
-    const f = orientation === 'w' ? x : 7 - x, r = orientation === 'w' ? 7 - y : y
-    const sq = FILES[f] + (r + 1)
-    const light = (f + r) % 2 === 1
-    const isSel = selected && (sq === selected.from || sq === selected.to)
-    const isLast = last && (sq === last.from || sq === last.to)
-    squares.push(
-      <div key={sq} data-square={sq} className={`relative ${light ? 'sq-light' : 'sq-dark'} ${kingSq === sq ? 'pulse-red' : ''}`}>
-        {isLast && !isSel && <div className="absolute inset-0 bg-amber-300/25" />}
-        {isSel && <motion.div layoutId={undefined} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0"
-          style={{ background: 'rgba(255,200,40,.35)', boxShadow: 'inset 0 0 0 2px #ffd75e, inset 0 0 14px 2px rgba(255,200,60,.8)' }} />}
-        {x === 0 && <span className={`absolute left-[3%] top-[2%] text-[clamp(7px,1.4vmin,12px)] font-bold ${light ? 'text-stone-600' : 'text-stone-300'}`}>{r + 1}</span>}
-        {y === 7 && <span className={`absolute right-[4%] bottom-[1%] text-[clamp(7px,1.4vmin,12px)] font-bold ${light ? 'text-stone-600' : 'text-stone-300'}`}>{FILES[f]}</span>}
-      </div>
-    )
+  const onSquare = new Map(pieces.filter(p => !p.captured).map(p => [p.square, p]))
+  const rows = []
+  for (let y = 0; y < 8; y++) {
+    const cells = []
+    for (let x = 0; x < 8; x++) {
+      const f = orientation === 'w' ? x : 7 - x, r = orientation === 'w' ? 7 - y : y
+      const sq = FILES[f] + (r + 1)
+      const light = (f + r) % 2 === 1
+      const isSel = selected && (sq === selected.from || sq === selected.to)
+      const isLast = last && (sq === last.from || sq === last.to)
+      cells.push(
+        <div key={sq} role="gridcell" aria-label={squareLabel(sq, onSquare.get(sq))} data-square={sq} className={`relative ${light ? 'sq-light' : 'sq-dark'} ${kingSq === sq ? 'pulse-red' : ''}`}>
+          {isLast && !isSel && <div className="absolute inset-0 bg-amber-300/25" aria-hidden="true" />}
+          {isSel && <motion.div aria-hidden="true" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0"
+            style={{ background: 'rgba(255,200,40,.35)', boxShadow: 'inset 0 0 0 2px #ffd75e, inset 0 0 14px 2px rgba(255,200,60,.8)' }} />}
+          {x === 0 && <span aria-hidden="true" className={`absolute left-[3%] top-[2%] text-[clamp(7px,1.4vmin,12px)] font-bold ${light ? 'text-stone-600' : 'text-stone-300'}`}>{r + 1}</span>}
+          {y === 7 && <span aria-hidden="true" className={`absolute right-[4%] bottom-[1%] text-[clamp(7px,1.4vmin,12px)] font-bold ${light ? 'text-stone-600' : 'text-stone-300'}`}>{FILES[f]}</span>}
+        </div>
+      )
+    }
+    rows.push(<div key={y} role="row" className="contents">{cells}</div>)
   }
 
   const arrow = selected && (() => {
@@ -60,9 +66,9 @@ export function Board({ moves, upto = moves.length, orientation, selected, inChe
   return (
     <div className="board-frame w-full h-full board-tilt">
       <div className="relative w-full h-full rounded-[6px] overflow-hidden" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.6)' }}>
-        <div className="grid grid-cols-8 grid-rows-8 w-full h-full">{squares}</div>
+        <div role="grid" aria-label="Chess board" className="grid grid-cols-8 grid-rows-8 w-full h-full">{rows}</div>
 
-        <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
           {pieces.map(p => {
             const { x, y } = sqXY(p.square, orientation)
             return (
@@ -80,7 +86,7 @@ export function Board({ moves, upto = moves.length, orientation, selected, inChe
         </div>
 
         {arrow && (
-          <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 8 8" style={{ zIndex: 5, filter: 'drop-shadow(0 0 .08px #ffcf40) drop-shadow(0 0 .2px rgba(255,200,60,.9))' }}>
+          <svg aria-hidden="true" className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 8 8" style={{ zIndex: 5, filter: 'drop-shadow(0 0 .08px #ffcf40) drop-shadow(0 0 .2px rgba(255,200,60,.9))' }}>
             <motion.path key={arrow.key} d={arrow.d} fill="none" stroke="#ffd75e" strokeWidth=".12" strokeLinecap="round" strokeLinejoin="round"
               initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: .45, ease: 'easeOut' }} />
             <motion.polygon key={arrow.key + 'h'} points={arrow.head} fill="#ffd75e" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .35 }} />

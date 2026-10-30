@@ -2,7 +2,7 @@ import type { Server, Socket } from 'socket.io'
 import { Chess } from 'chess.js'
 import { z } from 'zod'
 import { COOKIE, verifyToken, type AuthUser } from './auth.js'
-import { saveGame, type Db } from './db.js'
+import { saveGame, saveRoomRow, deleteRoomRow, loadRoomRows, type Db } from './db.js'
 import { parse } from 'cookie'
 
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // no 0/O/1/I
@@ -15,17 +15,28 @@ interface Room {
   black: Seat | null
   hostColor: 'w' | 'b'
   clocks: { w: number; b: number } | null // null = no timer
+  minutes: number // 0 = no timer
   increment: number
   lastTick: number
   status: 'waiting' | 'playing' | 'over'
   result?: string
   termination?: string
   drawOffer?: 'w' | 'b'
+  rematch: Set<'w' | 'b'>
   startedAt: number
   gameId?: number
   timer?: NodeJS.Timeout
   expiry?: NodeJS.Timeout
   abandon?: NodeJS.Timeout
+  cleanup?: NodeJS.Timeout
+}
+
+/** What is stored for an unfinished room so it can be restored after a server restart. */
+interface Snapshot {
+  code: string; pgn: string; status: 'waiting' | 'playing'
+  white: AuthUser | null; black: AuthUser | null
+  hostColor: 'w' | 'b'; minutes: number; increment: number
+  clocks: { w: number; b: number } | null; drawOffer: 'w' | 'b' | null; startedAt: number
 }
 
 const createSchema = z.object({
@@ -40,11 +51,32 @@ const WAITING_TTL_MS = 30 * 60_000
 export function attachRooms(io: Server, db: Db) {
   const rooms = new Map<string, Room>()
 
+  /** Save an unfinished room so it survives a restart. Failure must never break a live game. */
+  const persist = (room: Room) => {
+    if (room.status === 'over') return
+    const snap: Snapshot = {
+      code: room.code, pgn: room.chess.pgn(), status: room.status,
+      white: room.white?.user ?? null, black: room.black?.user ?? null,
+      hostColor: room.hostColor, minutes: room.minutes, increment: room.increment,
+      clocks: room.clocks, drawOffer: room.drawOffer ?? null, startedAt: room.startedAt,
+    }
+    try { saveRoomRow(db, room.code, JSON.stringify(snap)) } catch (err) { console.error('[rooms] persist failed:', err) }
+  }
+  const forget = (code: string) => { try { deleteRoomRow(db, code) } catch (err) { console.error('[rooms] forget failed:', err) } }
+
   const dropRoom = (room: Room) => {
     if (room.timer) clearInterval(room.timer)
     if (room.expiry) clearTimeout(room.expiry)
     if (room.abandon) clearTimeout(room.abandon)
+    if (room.cleanup) clearTimeout(room.cleanup)
     rooms.delete(room.code)
+    forget(room.code)
+  }
+
+  // A waiting room outlives a dropped connection (phone backgrounded, page reloaded) but not forever.
+  const armWaitingExpiry = (room: Room) => {
+    room.expiry = setTimeout(() => { if (room.status === 'waiting') dropRoom(room) }, WAITING_TTL_MS)
+    room.expiry.unref()
   }
 
   io.use((socket, next) => {
@@ -73,6 +105,7 @@ export function attachRooms(io: Server, db: Db) {
       result: room.result ?? null,
       termination: room.termination ?? null,
       drawOffer: room.drawOffer ?? null,
+      rematch: { w: room.rematch.has('w'), b: room.rematch.has('b') },
       gameId: room.gameId ?? null,
       inCheck: room.chess.inCheck(),
     }
@@ -107,8 +140,10 @@ export function attachRooms(io: Server, db: Db) {
         mode: 'pvp', result, termination, pgn: room.chess.pgn(), startedAt: room.startedAt, endedAt: Date.now(),
       })
     } catch (err) { console.error('[rooms] could not save finished game:', err) } // players still see the result
+    forget(room.code)
     broadcast(room)
-    setTimeout(() => dropRoom(room), 10 * 60_000).unref()
+    room.cleanup = setTimeout(() => dropRoom(room), 10 * 60_000)
+    room.cleanup.unref()
   }
 
   function startClock(room: Room) {
@@ -136,6 +171,23 @@ export function attachRooms(io: Server, db: Db) {
       if (room.status === 'playing' && !room.white?.socketId && !room.black?.socketId) finish(room, '1/2-1/2', 'abandoned')
     }, ABANDON_MS)
     room.abandon.unref()
+  }
+
+  /** Both players asked for a rematch: same room, same settings, colours swapped. The finished game is already saved. */
+  function startRematch(room: Room) {
+    if (room.cleanup) clearTimeout(room.cleanup)
+    if (room.timer) clearInterval(room.timer)
+    room.timer = undefined
+    ;[room.white, room.black] = [room.black, room.white]
+    room.chess = new Chess()
+    room.status = 'playing'
+    room.result = room.termination = room.drawOffer = room.gameId = undefined
+    room.rematch.clear()
+    room.clocks = room.minutes > 0 ? { w: room.minutes * 60_000, b: room.minutes * 60_000 } : null
+    room.startedAt = Date.now()
+    startClock(room)
+    persist(room)
+    broadcast(room)
   }
 
   function makeCode() {
@@ -177,16 +229,15 @@ export function attachRooms(io: Server, db: Db) {
       const room: Room = {
         code: makeCode(), chess: new Chess(), white: null, black: null, hostColor: color,
         clocks: p.data.minutes > 0 ? { w: p.data.minutes * 60_000, b: p.data.minutes * 60_000 } : null,
-        increment: p.data.minutes > 0 ? p.data.increment * 1000 : 0,
-        lastTick: Date.now(), status: 'waiting', startedAt: Date.now(),
+        minutes: p.data.minutes, increment: p.data.minutes > 0 ? p.data.increment * 1000 : 0,
+        lastTick: Date.now(), status: 'waiting', startedAt: Date.now(), rematch: new Set(),
       }
       const seat = { user, socketId: null }
       if (color === 'w') room.white = seat; else room.black = seat
       rooms.set(room.code, room)
-      // A waiting room outlives a dropped connection (phone backgrounded, page reloaded) but not forever.
-      room.expiry = setTimeout(() => { if (room.status === 'waiting') dropRoom(room) }, WAITING_TTL_MS)
-      room.expiry.unref()
+      armWaitingExpiry(room)
       attach(room, color)
+      persist(room)
       ack?.({ code: room.code })
       broadcast(room)
     })
@@ -213,6 +264,7 @@ export function attachRooms(io: Server, db: Db) {
       room.startedAt = Date.now()
       if (room.expiry) clearTimeout(room.expiry)
       startClock(room)
+      persist(room)
       ack?.({ code })
       broadcast(room)
     })
@@ -238,6 +290,7 @@ export function attachRooms(io: Server, db: Db) {
       if (c.isInsufficientMaterial()) return finish(room, '1/2-1/2', 'insufficient material')
       if (c.isThreefoldRepetition()) return finish(room, '1/2-1/2', 'repetition')
       if (c.isDraw()) return finish(room, '1/2-1/2', 'fifty-move rule')
+      persist(room)
       broadcast(room)
     })
 
@@ -255,11 +308,22 @@ export function attachRooms(io: Server, db: Db) {
       if (!color) return
       if (room.drawOffer && room.drawOffer !== color) return finish(room, '1/2-1/2', 'agreement')
       room.drawOffer = color
+      persist(room)
       broadcast(room)
     })
 
     on('game:declineDraw', () => {
-      if (current?.drawOffer) { current.drawOffer = undefined; broadcast(current) }
+      if (current?.drawOffer) { current.drawOffer = undefined; persist(current); broadcast(current) }
+    })
+
+    on('game:rematch', () => {
+      const room = current
+      if (!room || room.status !== 'over') return
+      const color = seatOf(room, user.id)
+      if (!color) return
+      room.rematch.add(color)
+      if (room.rematch.size === 2) startRematch(room)
+      else broadcast(room)
     })
 
     on('game:leave', () => {
@@ -283,6 +347,24 @@ export function attachRooms(io: Server, db: Db) {
       if (seat && seat.socketId === socket.id) { seat.socketId = null; broadcast(room); watchAbandon(room) }
     })
   })
+
+  // Bring back the unfinished rooms from before a restart. Everyone starts offline until they reconnect; clock time while the
+  // server was down is not charged (clocks are as of the last move).
+  for (const row of loadRoomRows(db)) {
+    try {
+      const s = JSON.parse(row.snapshot) as Snapshot
+      const chess = new Chess()
+      if (s.pgn) chess.loadPgn(s.pgn)
+      const room: Room = {
+        code: s.code, chess, white: s.white ? { user: s.white, socketId: null } : null, black: s.black ? { user: s.black, socketId: null } : null,
+        hostColor: s.hostColor, clocks: s.clocks, minutes: s.minutes, increment: s.increment, lastTick: Date.now(),
+        status: s.status, drawOffer: s.drawOffer ?? undefined, rematch: new Set(), startedAt: s.startedAt,
+      }
+      rooms.set(room.code, room)
+      if (room.status === 'waiting') armWaitingExpiry(room)
+      else { startClock(room); watchAbandon(room) }
+    } catch (err) { console.error(`[rooms] could not restore room ${row.code}:`, err); forget(row.code) }
+  }
 
   /** The unfinished room (waiting or playing) this user is seated in, so they can resume after a reload. */
   return {

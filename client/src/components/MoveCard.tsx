@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { forwardRef } from 'react'
 import type { Card } from '../engine/hand'
+import { describeCard } from '../a11y'
 
 const FILES = 'abcdefgh'
 
@@ -32,7 +33,7 @@ export const MoveCard = forwardRef<HTMLButtonElement, Props>(function MoveCard({
   const fan = (index - mid) * (compact ? 0 : 3.2)
   return (
     <motion.button
-      ref={ref} type="button" data-card={card.san} aria-pressed={selected} onClick={onSelect}
+      ref={ref} type="button" data-card={card.san} aria-label={describeCard(card)} aria-pressed={selected} onClick={onSelect}
       className={`hand-card ${selected ? 'card-selected' : ''} relative shrink-0 text-left outline-none focus-visible:ring-4 ring-gold-400 rounded-[14px]`}
       style={{ zIndex: selected ? 20 : index, transformOrigin: '50% 120%' }}
       initial={{ y: 220, opacity: 0, rotate: -12, scale: .8 }}
@@ -50,7 +51,7 @@ export const MoveCard = forwardRef<HTMLButtonElement, Props>(function MoveCard({
         <div className="w-[62%] aspect-square mb-[4%]"><Diagram card={card} /></div>
         <div className="text-[clamp(14px,1.5vw,21px)] font-black leading-none">{card.san}</div>
         {(showBest || card.captured) && (
-          <div className="absolute bottom-[5%] right-[7%] flex gap-1 text-[9px] sm:text-[10px] font-bold">
+          <div className="absolute top-[19%] right-[5%] flex flex-col items-end gap-0.5 text-[8px] sm:text-[10px] font-bold leading-none">
             {card.captured && <span className="px-1.5 rounded bg-red-800/80 text-red-100">x</span>}
             {showBest && <span className="px-1.5 rounded bg-emerald-700/90 text-emerald-50">{card.evalLabel}</span>}
           </div>

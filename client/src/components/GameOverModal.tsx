@@ -6,9 +6,10 @@ interface Props {
   title: string; subtitle: string; won: boolean | null
   onRematch?: () => void; onReview?: () => void; onLobby: () => void
   saveStatus?: 'saving' | 'saved' | 'failed'; onRetrySave?: () => void
+  rematchLabel?: string; rematchDisabled?: boolean
 }
 
-export function GameOverModal({ title, subtitle, won, onRematch, onReview, onLobby, saveStatus, onRetrySave }: Props) {
+export function GameOverModal({ title, subtitle, won, onRematch, onReview, onLobby, saveStatus, onRetrySave, rematchLabel = 'Rematch', rematchDisabled }: Props) {
   const [open, setOpen] = useState(true)
   useEffect(() => { if (won === true) sfx.win(); else if (won === false) sfx.lose() }, [won])
   const embers = useMemo(() => Array.from({ length: won ? 28 : 0 }, (_, i) => ({ i, left: Math.random() * 100, dur: 3 + Math.random() * 3, dx: (Math.random() - .5) * 160, delay: Math.random() * 1.5 })), [won])
@@ -32,7 +33,7 @@ export function GameOverModal({ title, subtitle, won, onRematch, onReview, onLob
         <div className="flex flex-col gap-3">
           {onReview && <button className="btn-gold" onClick={onReview}>Review game</button>}
           <button className="btn-ghost" data-testid="view-board" onClick={() => setOpen(false)}>View board</button>
-          {onRematch && <button className="btn-ghost" onClick={onRematch}>Rematch</button>}
+          {onRematch && <button className="btn-ghost disabled:opacity-60 disabled:cursor-not-allowed" data-testid="rematch" disabled={rematchDisabled} onClick={onRematch}>{rematchLabel}</button>}
           <button className="btn-ghost" onClick={onLobby}>Back to lobby</button>
         </div>
       </motion.div>

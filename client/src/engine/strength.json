@@ -1,0 +1,25 @@
+{
+  "measured": true,
+  "measuredOn": "2026-10-30",
+  "gamesPerPair": 16,
+  "pairs": {
+    "medium-vs-easy": {
+      "wins": 16,
+      "draws": 0,
+      "losses": 0,
+      "games": 16
+    },
+    "hard-vs-medium": {
+      "wins": 16,
+      "draws": 0,
+      "losses": 0,
+      "games": 16
+    },
+    "hard-vs-easy": {
+      "wins": 16,
+      "draws": 0,
+      "losses": 0,
+      "games": 16
+    }
+  }
+}

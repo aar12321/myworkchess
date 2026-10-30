@@ -9,6 +9,7 @@ import { MoveHistory } from './MoveHistory'
 import { PlayerBar, type PlayerInfo } from './PlayerBar'
 import { isMuted, setMuted, sfx } from '../sfx'
 import { RotateHint } from './RotateHint'
+import { describeCard, describeMove } from '../a11y'
 
 export interface Action { label: string; onClick: () => void; testId?: string; disabled?: boolean }
 
@@ -60,6 +61,7 @@ interface Props {
   overlay?: ReactNode
   boardOverlay?: ReactNode
   notice?: string
+  resultText?: string // e.g. "You won. Checkmate.", announced to screen readers
 }
 
 export function GameLayout(p: Props) {
@@ -67,6 +69,12 @@ export function GameLayout(p: Props) {
   const [muted, setM] = useState(isMuted())
   const selected = p.cards?.find(c => c.id === p.selectedId) ?? null
   const sans = p.moves.map(m => m.san)
+
+  // Screen-reader announcements: each move in words, then the dealt cards, then the result. (Polite, so they queue.)
+  const [live, setLive] = useState('')
+  useEffect(() => { const m = p.moves[p.moves.length - 1]; if (m) setLive(`${describeMove(m)}.`) }, [p.moves.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (p.myTurn && p.cards && p.cards.length > 0) setLive(`Your turn. ${p.cards.length} move cards: ${p.cards.map(describeCard).join('; ')}.`) }, [p.cards]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (p.resultText) setLive(`Game over. ${p.resultText}`) }, [p.resultText])
 
   return (
     <div className="h-[100dvh] flex flex-col table-bg overflow-hidden" style={{ paddingBottom: 'var(--safe-b)' }}>
@@ -133,6 +141,7 @@ export function GameLayout(p: Props) {
           </motion.div>
         )}
       </AnimatePresence>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="live">{live}</div>
       {p.overlay}
       <RotateHint />
     </div>

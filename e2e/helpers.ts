@@ -10,13 +10,13 @@ export async function login(page: Page, username = 'demo', password = '1234') {
   await expect(page.getByTestId('whoami')).toHaveText(username)
 }
 
-export async function register(page: Page, username: string, password: string) {
-  await page.goto('/')
+export async function register(page: Page, username: string, password: string, opts: { alreadyOnPage?: boolean } = {}) {
+  if (!opts.alreadyOnPage) await page.goto('/')
   await page.getByRole('tab', { name: 'Create account' }).click()
   await page.getByLabel('Username').fill(username)
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: 'Create account' }).last().click()
-  await expect(page.getByTestId('whoami')).toHaveText(username)
+  if (!opts.alreadyOnPage) await expect(page.getByTestId('whoami')).toHaveText(username)
 }
 
 /** Waits for a full hand of cards, picks the first, and plays it. Returns the SAN played. */

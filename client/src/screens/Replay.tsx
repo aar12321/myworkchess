@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type GameFull, type User } from '../api'
+import { api, type GameFull, type SharedGame, type User } from '../api'
 import { Board } from '../components/Board'
 import { MoveHistory } from '../components/MoveHistory'
 import { Avatar } from '../components/PlayerBar'
@@ -7,19 +7,30 @@ import { movesFromPgn } from '../tracker'
 import { sfx } from '../sfx'
 import { RotateHint } from '../components/RotateHint'
 
-export function Replay({ id, user, onBack }: { id: number; user: User; onBack: () => void }) {
-  const [game, setGame] = useState<GameFull | null>(null)
+type Source = { id: number } | { shareId: string }
+type ReplayGame = GameFull | SharedGame
+
+export function Replay({ source, user, onBack }: { source: Source; user: User | null; onBack: () => void }) {
+  const [game, setGame] = useState<ReplayGame | null>(null)
   const [err, setErr] = useState('')
   const [ply, setPly] = useState(0)
   const [auto, setAuto] = useState(false)
-  useEffect(() => { api.getGame(id).then(g => { setGame(g); setPly(0) }).catch(e => setErr(e.message)) }, [id])
+  const key = 'id' in source ? source.id : source.shareId
+  useEffect(() => {
+    setGame(null); setErr('')
+    const load: Promise<ReplayGame> = 'id' in source ? api.getGame(source.id) : api.getShared(source.shareId)
+    load.then(g => { setGame(g); setPly(0) }).catch(e => setErr(e.message))
+  }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
   const moves = useMemo(() => (game ? movesFromPgn(game.pgn) : []), [game])
-  const orientation = game && game.blackId === user.id ? 'b' : 'w'
+  const orientation = game && user && 'blackId' in game && game.blackId === user.id ? 'b' : 'w'
   const [copied, setCopied] = useState(false)
   const copyPgn = async () => { try { await navigator.clipboard.writeText(game!.pgn); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { window.prompt('Copy the PGN:', game!.pgn) } }
+  const shareUrl = game ? `${location.origin}/r/${game.shareId}` : ''
+  const [linkCopied, setLinkCopied] = useState(false)
+  const copyLink = async () => { try { await navigator.clipboard.writeText(shareUrl); setLinkCopied(true); setTimeout(() => setLinkCopied(false), 1500) } catch { window.prompt('Copy this link:', shareUrl) } }
   const downloadPgn = () => {
     const url = URL.createObjectURL(new Blob([game!.pgn + '\n'], { type: 'application/x-chess-pgn' }))
-    const a = document.createElement('a'); a.href = url; a.download = `knights-hand-${game!.id}.pgn`; a.click(); URL.revokeObjectURL(url)
+    const a = document.createElement('a'); a.href = url; a.download = `knights-hand-${game!.shareId}.pgn`; a.click(); URL.revokeObjectURL(url)
   }
 
   const go = (n: number) => setPly(p => { const v = Math.max(0, Math.min(moves.length, typeof n === 'number' ? n : p)); if (v !== p && v > 0) (moves[v - 1].captured ? sfx.capture : sfx.move)(); return v })
@@ -68,6 +79,7 @@ export function Replay({ id, user, onBack }: { id: number; user: User; onBack: (
         <div className="flex gap-2">
           <button className="btn-ghost" data-testid="copy-pgn" onClick={copyPgn}>{copied ? 'Copied!' : 'Copy PGN'}</button>
           <button className="btn-ghost" data-testid="download-pgn" onClick={downloadPgn}>Download PGN</button>
+          <button className="btn-ghost" data-testid="copy-link" onClick={copyLink}>{linkCopied ? 'Link copied!' : 'Copy link'}</button>
         </div>
       </footer>
       <RotateHint />

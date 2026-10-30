@@ -2,7 +2,10 @@ import Database from 'better-sqlite3'
 import bcrypt from 'bcryptjs'
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { Chess } from 'chess.js'
+
+export const newShareId = () => randomBytes(8).toString('base64url').slice(0, 10)
 
 export function openDb(file = process.env.DB_FILE || 'data/chess.db') {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -27,7 +30,19 @@ export function openDb(file = process.env.DB_FILE || 'data/chess.db') {
     );
     CREATE INDEX IF NOT EXISTS games_white ON games(white_id);
     CREATE INDEX IF NOT EXISTS games_black ON games(black_id);
+    -- Unfinished friend games, so a restart doesn't end them.
+    CREATE TABLE IF NOT EXISTS rooms (
+      code TEXT PRIMARY KEY,
+      snapshot TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `)
+  // Shareable replay links: an unguessable id per game (added to databases created before this existed).
+  const cols = db.prepare('PRAGMA table_info(games)').all() as { name: string }[]
+  if (!cols.some(c => c.name === 'share_id')) db.exec('ALTER TABLE games ADD COLUMN share_id TEXT')
+  for (const row of db.prepare('SELECT id FROM games WHERE share_id IS NULL').all() as { id: number }[])
+    db.prepare('UPDATE games SET share_id = ? WHERE id = ?').run(newShareId(), row.id)
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS games_share ON games(share_id)')
   // Seed the demo account (username "demo", password "1234").
   if (process.env.SEED_DEMO !== '0' && !db.prepare('SELECT 1 FROM users WHERE username = ?').get('demo')) {
     db.prepare('INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)')
@@ -62,7 +77,14 @@ export function withHeaders(pgn: string, g: Pick<GameRecord, 'whiteLabel' | 'bla
 }
 
 export function saveGame(db: Db, g: GameRecord): number {
-  const r = db.prepare(`INSERT INTO games (white_id, black_id, white_label, black_label, mode, result, termination, pgn, started_at, ended_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(g.whiteId, g.blackId, g.whiteLabel, g.blackLabel, g.mode, g.result, g.termination, withHeaders(g.pgn, g), g.startedAt, g.endedAt)
+  const r = db.prepare(`INSERT INTO games (white_id, black_id, white_label, black_label, mode, result, termination, pgn, started_at, ended_at, share_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(g.whiteId, g.blackId, g.whiteLabel, g.blackLabel, g.mode, g.result, g.termination, withHeaders(g.pgn, g), g.startedAt, g.endedAt, newShareId())
   return Number(r.lastInsertRowid)
 }
+
+export function saveRoomRow(db: Db, code: string, snapshot: string) {
+  db.prepare('INSERT INTO rooms (code, snapshot, updated_at) VALUES (?,?,?) ON CONFLICT(code) DO UPDATE SET snapshot = excluded.snapshot, updated_at = excluded.updated_at')
+    .run(code, snapshot, Date.now())
+}
+export function deleteRoomRow(db: Db, code: string) { db.prepare('DELETE FROM rooms WHERE code = ?').run(code) }
+export function loadRoomRows(db: Db) { return db.prepare('SELECT code, snapshot FROM rooms').all() as { code: string; snapshot: string }[] }

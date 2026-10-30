@@ -10,6 +10,7 @@ import type { PlayerInfo } from '../components/PlayerBar'
 import { aiMove, LEVELS } from '../engine/ai'
 import { buildHandFromLines, dealHand, type Card } from '../engine/hand'
 import { sfx } from '../sfx'
+import { navigate, useBackGuard } from '../router'
 import { getSocket } from '../socket'
 import { movesFromPgn } from '../tracker'
 import type { GameSetup } from './Lobby'
@@ -152,7 +153,7 @@ function AiGame({ user, setup, onExit, onReview, onRematch }: Props & { setup: E
   const lv = LEVELS[level]
   const players: Record<'w' | 'b', PlayerInfo> = {
     [me]: { name: user.username, color: me, clockMs: clocks?.[me] ?? null, active: !outcome && turn === me, avatar: AVATARS[me], sub: 'You' },
-    [opp]: { name: `${lv.label} AI`, color: opp, clockMs: clocks?.[opp] ?? null, active: !outcome && turn === opp, avatar: AVATARS[opp], sub: thinking ? 'Thinking…' : lv.elo },
+    [opp]: { name: `${lv.label} AI`, color: opp, clockMs: clocks?.[opp] ?? null, active: !outcome && turn === opp, avatar: AVATARS[opp], sub: thinking ? 'Thinking…' : lv.tag },
   } as Record<'w' | 'b', PlayerInfo>
 
   const won = outcome ? (outcome.result === '1/2-1/2' ? null : (outcome.result === '1-0') === (me === 'w')) : null
@@ -161,6 +162,7 @@ function AiGame({ user, setup, onExit, onReview, onRematch }: Props & { setup: E
       moves={moves} orientation={me} turn={turn} inCheck={chess.inCheck()} top={players[opp]} bottom={players[me]}
       cards={cards} myTurn={myTurn} selectedId={selectedId} onSelect={setSelectedId} onPlay={play} showBest={level === 'easy'}
       notice={degraded || aiDegraded ? DEGRADED_NOTICE : undefined}
+      resultText={outcome ? `${won === null ? 'Draw' : won ? 'You won' : 'You lost'}. ${cap(outcome.termination)}.` : undefined}
       statusTitle={outcome ? 'Game over' : myTurn ? 'YOUR TURN' : 'Opponent…'} statusSub={outcome ? outcome.termination : myTurn ? 'Choose a move card' : 'The computer is thinking'}
       onBack={onExit}
       actions={outcome ? [] : [{ label: 'Resign', testId: 'resign', onClick: () => setConfirmResign(true) }]}
@@ -181,7 +183,7 @@ interface RoomState {
   code: string; status: 'waiting' | 'playing' | 'over'; fen: string; turn: 'w' | 'b'; pgn: string; inCheck: boolean
   white: { username: string; online: boolean } | null; black: { username: string; online: boolean } | null
   clocks: { w: number; b: number } | null; color: 'w' | 'b' | null; result: string | null; termination: string | null
-  drawOffer: 'w' | 'b' | null; gameId: number | null
+  drawOffer: 'w' | 'b' | null; rematch: { w: boolean; b: boolean }; gameId: number | null
 }
 
 function PvpGame({ setup, onExit, onReview }: Props & { setup: Exclude<GameSetup, { kind: 'ai' }> }) {
@@ -208,7 +210,7 @@ function PvpGame({ setup, onExit, onReview }: Props & { setup: Exclude<GameSetup
     s.on('connect', () => { setError(''); setConnected(true); if (codeRef.current) join() })
     setConnected(s.connected)
     const start = () => {
-      if (setup.kind === 'create') s.emit('room:create', { minutes: setup.minutes, color: setup.color }, (res: { code?: string; error?: string }) => { if (res.error) setError(res.error); else codeRef.current = res.code! })
+      if (setup.kind === 'create') s.emit('room:create', { minutes: setup.minutes, color: setup.color }, (res: { code?: string; error?: string }) => { if (res.error) setError(res.error); else { codeRef.current = res.code!; navigate(`/room/${res.code}`, true) } })
       else join()
     }
     if (s.connected) start(); else s.once('connect', start)
@@ -248,11 +250,15 @@ function PvpGame({ setup, onExit, onReview }: Props & { setup: Exclude<GameSetup
   }
   const copy = async () => { try { await navigator.clipboard.writeText(room!.code) } catch { /* ignore */ } setCopied(true); setTimeout(() => setCopied(false), 1500) }
   const share = async () => {
-    const url = `${location.origin}/?room=${room!.code}`
+    const url = `${location.origin}/room/${room!.code}`
     if (navigator.share) { try { await navigator.share({ title: "Knight's Hand", text: `Join my chess game! Code: ${room!.code}`, url }) } catch { /* cancelled */ } } else copy()
   }
   // Leaving a waiting room closes it (so ask first); leaving a running game keeps your seat and you can resume from the lobby.
   const back = () => { if (room?.status === 'waiting') setConfirm('close'); else onExit() }
+
+  // The browser Back button must not silently close a waiting room.
+  const askClose = useCallback(() => setConfirm('close'), [])
+  useBackGuard(room?.status === 'waiting', askClose)
 
   if (!room) return (
     <div className="min-h-[100dvh] table-bg flex flex-col items-center justify-center gap-4 p-6 text-center">
@@ -264,6 +270,9 @@ function PvpGame({ setup, onExit, onReview }: Props & { setup: Exclude<GameSetup
   const over = room.status === 'over'
   const won = over && room.result ? (room.result === '1/2-1/2' ? null : (room.result === '1-0') === (me === 'w')) : null
   const drawOfferedToMe = room.drawOffer && room.drawOffer !== me
+  const iAsked = room.rematch[me], theyAsked = room.rematch[opp], theyHere = !!nameOf(opp)?.online
+  const rematchLabel = iAsked ? 'Waiting for friend…' : theyAsked ? 'Accept rematch' : !theyHere ? 'Friend left' : 'Rematch'
+  const rematchDisabled = iAsked || (!theyAsked && !theyHere)
   const statusTitle = room.status === 'waiting' ? 'Waiting' : over ? 'Game over' : myTurn ? 'YOUR TURN' : 'Opponent…'
   const statusSub = room.status === 'waiting' ? 'Share your code' : over ? room.termination ?? '' : myTurn ? 'Choose a move card' : `${nameOf(opp)?.username ?? 'Friend'} is choosing`
 
@@ -272,6 +281,7 @@ function PvpGame({ setup, onExit, onReview }: Props & { setup: Exclude<GameSetup
       moves={moves} orientation={me} turn={room.turn} inCheck={room.inCheck} top={mk(opp)} bottom={mk(me)}
       cards={cards} myTurn={myTurn} selectedId={selectedId} onSelect={setSelectedId} onPlay={play} showBest={false}
       notice={degraded ? DEGRADED_NOTICE : undefined}
+      resultText={over ? `${won === null ? 'Draw' : won ? 'You won' : 'You lost'}. ${cap(room.termination ?? '')}.` : undefined}
       statusTitle={statusTitle} statusSub={statusSub} onBack={back}
       actions={playing ? [
         { label: room.drawOffer === me ? 'Draw offered' : 'Offer draw', testId: 'offer-draw', disabled: room.drawOffer === me, onClick: () => getSocket().emit('game:offerDraw') },
@@ -303,6 +313,7 @@ function PvpGame({ setup, onExit, onReview }: Props & { setup: Exclude<GameSetup
         {over && (
           <GameOverModal won={won} title={won === null ? 'Draw' : won ? 'Victory!' : 'Defeat'}
             subtitle={`${cap(room.termination ?? '')} · ${room.result}`}
+            onRematch={() => getSocket().emit('game:rematch')} rematchLabel={rematchLabel} rematchDisabled={rematchDisabled}
             onReview={room.gameId ? () => onReview(room.gameId!) : undefined} onLobby={onExit} />
         )}
       </>}

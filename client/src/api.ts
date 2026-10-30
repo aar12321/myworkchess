@@ -1,6 +1,8 @@
 export interface User { id: number; username: string }
-export interface GameSummary { id: number; whiteLabel: string; blackLabel: string; whiteId: number | null; blackId: number | null; mode: string; result: string; termination: string; endedAt: number }
+export interface GameSummary { id: number; shareId: string; whiteLabel: string; blackLabel: string; whiteId: number | null; blackId: number | null; mode: string; result: string; termination: string; endedAt: number }
 export interface GameFull extends GameSummary { pgn: string; startedAt: number }
+/** What anyone with a share link can see: no account ids. */
+export interface SharedGame { whiteLabel: string; blackLabel: string; mode: string; result: string; termination: string; pgn: string; endedAt: number; shareId: string }
 
 async function req<T>(path: string, body?: unknown, method = body ? 'POST' : 'GET'): Promise<T> {
   const res = await fetch(`/api${path}`, {
@@ -21,5 +23,6 @@ export const api = {
   saveGame: (g: { mode: string; playerColor: 'w' | 'b'; result: string; termination: string; pgn: string; startedAt: number }) => req<{ id: number }>('/games', g),
   listGames: () => req<{ games: GameSummary[] }>('/games').then(r => r.games),
   activeRoom: () => req<{ room: { code: string; status: string } | null }>('/rooms/active').then(r => r.room).catch(() => null),
+  getShared: (shareId: string) => req<{ game: SharedGame }>(`/games/shared/${encodeURIComponent(shareId)}`).then(r => r.game),
   getGame: (id: number) => req<{ game: GameFull }>(`/games/${id}`).then(r => r.game),
 }

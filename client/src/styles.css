@@ -11,11 +11,17 @@ body {
 button { font-family: inherit; }
 
 .table-bg {
+  /* A tavern table, drawn in CSS: lantern glows, vignette, wood grain (SVG noise stretched along the planks), plank seams and tones. */
   background:
-    radial-gradient(ellipse at 50% 40%, rgba(255,190,90,.10), transparent 60%),
-    radial-gradient(ellipse at center, transparent 40%, rgba(10,5,2,.75) 100%),
-    url('/assets/table.webp') center/cover no-repeat,
-    repeating-linear-gradient(95deg, #3a2414 0 38px, #33200f 38px 40px, #3f2816 40px 90px, #2e1c0e 90px 92px);
+    radial-gradient(circle at 4% 6%, rgba(255,176,64,.34), transparent 20%),
+    radial-gradient(circle at 96% 6%, rgba(255,176,64,.28), transparent 18%),
+    radial-gradient(circle at 5% 96%, rgba(255,150,50,.22), transparent 18%),
+    radial-gradient(circle at 95% 95%, rgba(255,150,50,.22), transparent 18%),
+    radial-gradient(ellipse at 50% 42%, rgba(255,196,110,.14), transparent 58%),
+    radial-gradient(ellipse at center, transparent 38%, rgba(8,4,2,.8) 100%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='520' height='520'><filter id='g' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='0.004 0.16' numOctaves='4' seed='11' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .12  0 0 0 0 .06  0 0 0 0 .02  0 0 0 1.5 -.55'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>"),
+    repeating-linear-gradient(0deg, transparent 0 134px, rgba(0,0,0,.55) 134px 137px, rgba(255,205,130,.07) 137px 139px),
+    repeating-linear-gradient(0deg, #55341b 0 139px, #472a15 139px 278px, #5b3a1e 278px 417px, #402712 417px 556px, #4f301a 556px 695px);
 }
 
 .panel {

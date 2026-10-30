@@ -2,6 +2,7 @@ import { motion } from 'framer-motion'
 import { useState } from 'react'
 import type { User } from '../api'
 import { LEVELS, type Level } from '../engine/ai'
+import { strengthNote } from '../engine/strength'
 import { Avatar } from '../components/PlayerBar'
 import type { SavedAi } from '../aiSave'
 
@@ -69,9 +70,10 @@ export function Lobby({ user, onStart, onHistory, onLogout, initialCode, activeR
             {(Object.keys(LEVELS) as Level[]).map((lv, i) => (
               <motion.button key={lv} data-testid={`ai-${lv}`} whileHover={{ y: -6, scale: 1.02 }} whileTap={{ scale: .97 }} onClick={() => onStart({ kind: 'ai', level: lv, color: resolve(color), minutes })}
                 className="card-face text-left p-4 cursor-pointer" style={{ minHeight: 120 }}>
-                <div className="flex items-center justify-between"><span className="font-black text-xl">{LEVELS[lv].label}</span><span className="text-xs font-bold opacity-70">{LEVELS[lv].elo}</span></div>
+                <div className="flex items-center justify-between"><span className="font-black text-xl">{LEVELS[lv].label}</span><span className="text-xs font-bold opacity-70">{LEVELS[lv].tag}</span></div>
                 <div className="flex gap-1 my-1">{[0, 1, 2].map(n => <span key={n} className={n <= i ? 'text-amber-700' : 'text-stone-400/60'}>♞</span>)}</div>
                 <p className="text-sm font-body font-semibold leading-snug">{LEVELS[lv].blurb}</p>
+                {strengthNote(lv) && <p className="text-xs font-body mt-1 opacity-75" data-testid={`strength-${lv}`}>{strengthNote(lv)}</p>}
               </motion.button>
             ))}
           </div>
